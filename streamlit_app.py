@@ -7,7 +7,11 @@ st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 HTML = """
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-html,body,[class*="css"]{font-family:'Space Grotesk',sans-serif;}
+html,body,[class*="css"],.stApp,#root,.main,.block-container{
+    font-family:'Space Grotesk',sans-serif;
+    background-color:#0a0a0a !important;
+    color:#ececec !important;
+}
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 #MainMenu,footer,header{visibility:hidden;}
 section.main .block-container{padding-left:1rem;padding-right:1rem;max-width:760px;overflow-x:hidden;}
@@ -15,20 +19,19 @@ section.main .block-container{padding-left:1rem;padding-right:1rem;max-width:760
 /* user bubble: pinned LEFT */
 .user-bubble-row{display:flex;justify-content:flex-start;width:100%;margin:10px 0;overflow:hidden;}
 .user-bubble{
-    background:#3f3f3f;color:#fff;border-radius:26px;
+    background:#3f3f3f !important;color:#fff !important;border-radius:26px;
     padding:12px 20px;max-width:80%;width:fit-content;
     font-size:1.05rem;line-height:1.5;word-wrap:break-word;overflow-wrap:anywhere;
 }
 
 /* assistant: strip avatar + bubble */
-div[data-testid="stChatMessage"]{background:transparent;border:none;padding:6px 0;overflow:hidden;}
+div[data-testid="stChatMessage"]{background:transparent !important;border:none !important;padding:6px 0;overflow:hidden;}
 div[data-testid^="stChatMessageAvatar"]{display:none !important;}
 div[data-testid="stChatMessage"] div[data-testid="stChatMessageContent"]{
-    background:transparent;max-width:100%;padding:0;
+    background:transparent !important;max-width:100%;padding:0;
 }
 div[data-testid="stChatMessage"] .stMarkdown p{
-    color:#ececec;font-size:1.08rem;line-height:1.6;margin:0 0 6px 0;
-    overflow-wrap:anywhere;
+    color:#ececec !important;font-size:1.08rem;line-height:1.6;margin:0 0 6px 0;overflow-wrap:anywhere;
 }
 
 /* action buttons: force horizontal */
@@ -42,8 +45,8 @@ div[data-testid="stChatMessage"] button:hover{color:#fff !important;}
 div[data-testid="stChatMessage"] button p{margin:0 !important;}
 
 /* input */
-div[data-testid="stChatInput"]{border-radius:999px;border:1px solid #2a2a2a;background:#1a1a1a;}
-div[data-testid="stChatInput"] textarea{background:transparent;color:#fff;}
+div[data-testid="stChatInput"]{border-radius:999px;border:1px solid #2a2a2a;background:#1a1a1a !important;}
+div[data-testid="stChatInput"] textarea{background:transparent !important;color:#fff !important;}
 
 .brand{text-align:center;padding:28px 0 6px 0;font-size:1.5rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 </style>
@@ -82,22 +85,24 @@ def ask(prompt):
     last_err = None
     for _ in range(2):
         model = pick_model()
-        kwargs = dict(
-            model=model,
-            messages=[{"role": "system", "content": SYSTEM},
-                      {"role": "user", "content": prompt}],
-            max_completion_tokens=1024,
-            temperature=0.7,
-        )
+        # gpt-oss: instructions go in the USER message, not system [[1]]
         if "gpt-oss" in model:
-            kwargs["reasoning_effort"] = "none"
+            msgs = [{"role": "user", "content": SYSTEM + "\n\n" + prompt}]
+            kwargs = dict(model=model, messages=msgs,
+                          max_completion_tokens=1024, temperature=0.6, top_p=0.95,
+                          include_reasoning=False)   # kills thinking on gpt-oss [[1]]
+        else:
+            msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
+            kwargs = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
+            if "qwen" in model:
+                kwargs["reasoning_effort"] = "none"   # none IS valid for qwen [[1]]
+                kwargs["reasoning_format"] = "hidden"
         try:
             r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
         except NotFoundError:
             st.session_state.pop("model", None); last_err = f"model {model} gone"; continue
-        except TypeError:
-            kwargs.pop("reasoning_effort", None)
-            r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
+        except Exception as e:
+            last_err = str(e)[:120]; break
         content = (getattr(r.choices[0].message, "content", None) or "").strip()
         secs = max(1, round(time.time() - t0))
         used = r.usage.total_tokens if r.usage else "?"
