@@ -16,7 +16,6 @@ html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 #MainMenu,footer,header{visibility:hidden;}
 section.main .block-container{padding-left:1rem;padding-right:1rem;max-width:760px;overflow-x:hidden;}
 
-/* user bubble: pinned LEFT */
 .user-bubble-row{display:flex;justify-content:flex-start;width:100%;margin:10px 0;overflow:hidden;}
 .user-bubble{
     background:#3f3f3f !important;color:#fff !important;border-radius:26px;
@@ -24,7 +23,6 @@ section.main .block-container{padding-left:1rem;padding-right:1rem;max-width:760
     font-size:1.05rem;line-height:1.5;word-wrap:break-word;overflow-wrap:anywhere;
 }
 
-/* assistant: strip avatar + bubble */
 div[data-testid="stChatMessage"]{background:transparent !important;border:none !important;padding:6px 0;overflow:hidden;}
 div[data-testid^="stChatMessageAvatar"]{display:none !important;}
 div[data-testid="stChatMessage"] div[data-testid="stChatMessageContent"]{
@@ -34,7 +32,6 @@ div[data-testid="stChatMessage"] .stMarkdown p{
     color:#ececec !important;font-size:1.08rem;line-height:1.6;margin:0 0 6px 0;overflow-wrap:anywhere;
 }
 
-/* action buttons: force horizontal */
 div[data-testid="stHorizontalBlock"]{gap:0.25rem !important;flex-wrap:nowrap !important;}
 div[data-testid="stHorizontalBlock"] > div{flex:0 0 auto !important;width:auto !important;}
 div[data-testid="stChatMessage"] button{
@@ -44,7 +41,6 @@ div[data-testid="stChatMessage"] button{
 div[data-testid="stChatMessage"] button:hover{color:#fff !important;}
 div[data-testid="stChatMessage"] button p{margin:0 !important;}
 
-/* input */
 div[data-testid="stChatInput"]{border-radius:999px;border:1px solid #2a2a2a;background:#1a1a1a !important;}
 div[data-testid="stChatInput"] textarea{background:transparent !important;color:#fff !important;}
 
@@ -80,33 +76,42 @@ def pick_model():
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+def build_payload(prompt):
+    """Full conversation history + new prompt, shaped per model quirks."""
+    model = pick_model()
+    history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    if "gpt-oss" in model:
+        # gpt-oss ignores system prompts → bake rules into first user turn [[1]]
+        if history and history[0]["role"] == "user":
+            history[0] = {"role": "user", "content": SYSTEM + "\n\n" + history[0]["content"]}
+        else:
+            history.insert(0, {"role": "user", "content": SYSTEM})
+        history.append({"role": "user", "content": prompt})
+        kwargs = dict(model=model, messages=history, max_completion_tokens=1024,
+                      temperature=0.6, top_p=0.95, include_reasoning=False)
+    else:
+        msgs = [{"role": "system", "content": SYSTEM}] + history + [{"role": "user", "content": prompt}]
+        kwargs = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
+        if "qwen" in model:
+            kwargs["reasoning_effort"] = "none"
+            kwargs["reasoning_format"] = "hidden"
+    return kwargs
+
 def ask(prompt):
     t0 = time.time()
     last_err = None
     for _ in range(2):
-        model = pick_model()
-        # gpt-oss: instructions go in the USER message, not system [[1]]
-        if "gpt-oss" in model:
-            msgs = [{"role": "user", "content": SYSTEM + "\n\n" + prompt}]
-            kwargs = dict(model=model, messages=msgs,
-                          max_completion_tokens=1024, temperature=0.6, top_p=0.95,
-                          include_reasoning=False)   # kills thinking on gpt-oss [[1]]
-        else:
-            msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
-            kwargs = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
-            if "qwen" in model:
-                kwargs["reasoning_effort"] = "none"   # none IS valid for qwen [[1]]
-                kwargs["reasoning_format"] = "hidden"
+        kwargs = build_payload(prompt)
         try:
             r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
         except NotFoundError:
-            st.session_state.pop("model", None); last_err = f"model {model} gone"; continue
+            st.session_state.pop("model", None); last_err = f"model {kwargs['model']} gone"; continue
         except Exception as e:
             last_err = str(e)[:120]; break
         content = (getattr(r.choices[0].message, "content", None) or "").strip()
         secs = max(1, round(time.time() - t0))
         used = r.usage.total_tokens if r.usage else "?"
-        return content, secs, f"{used} tok · {model}"
+        return content, secs, f"{used} tok · {kwargs['model']}"
     raise RuntimeError(last_err or "Groq call failed")
 
 regen = st.session_state.pop("regen", None)
