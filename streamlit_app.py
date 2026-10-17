@@ -118,9 +118,5 @@ with st.container():
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     c, s, t = ask(prompt)
-    st.session_state.messages.append({"role": "assistant", "content": c, "secs
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    c, s, t = ask(prompt)
     st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t})
     st.rerun()
