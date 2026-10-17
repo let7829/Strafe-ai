@@ -1,56 +1,92 @@
 import streamlit as st
-from openai import OpenAI
+from groq import Groq
+import random
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+st.markdown("""
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+html, body, [class*="css"] {
+    font-family: 'Space Grotesk', sans-serif;
+}
+.stApp { background: #0a0a0f; }
+#MainMenu, footer { visibility: hidden; }
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+.brand {
+    font-size: 3.2rem;
+    font-weight: 700;
+    letter-spacing: -2px;
+    background: linear-gradient(90deg, #00f0ff, #a855f7);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    margin-bottom: 0;
+}
+.tag {
+    color: #6b7280;
+    font-size: 0.85rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-top: -10px;
+}
+section[data-testid="stSidebar"] { display: none; }
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+/* chat bubbles */
+.stChatMessage {
+    background: #13131a;
+    border: 1px solid #1f1f2b;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+}
+.stTextInput > div > div > input {
+    background: #13131a;
+    border: 1px solid #2a2a3a;
+    color: #fff;
+    border-radius: 999px;
+}
+div[data-testid="stChatInput"] {
+    border-radius: 999px !important;
+    border: 1px solid #2a2a3a !important;
+    background: #13131a !important;
+}
+.stMarkdown p { color: #e5e7eb; }
+</style>
+""", unsafe_allow_html=True)
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+keys = [
+    st.secrets["GROQ_API_KEY_1"], st.secrets["GROQ_API_KEY_2"],
+    st.secrets["GROQ_API_KEY_3"], st.secrets["GROQ_API_KEY_4"],
+    st.secrets["GROQ_API_KEY_5"], st.secrets["GROQ_API_KEY_6"],
+]
+client = Groq(api_key=random.choice(keys))
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+st.markdown('<div class="brand">STRAFE AI</div>', unsafe_allow_html=True)
+st.markdown('<div class="tag">fast · lean · direct</div>', unsafe_allow_html=True)
+st.write("")
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+
+if prompt := st.chat_input("Ask something"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        resp = client.chat.completions.create(
+            model="llama3-8b-8192",
             messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
+                {"role": "system", "content": "Be direct. No fluff."},
+                {"role": "user", "content": prompt}
             ],
-            stream=True,
-        )
+            max_tokens=150
+        ).choices[0].message.content
+        st.markdown(resp)
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    st.session_state.messages.append({"role": "assistant", "content": resp})
