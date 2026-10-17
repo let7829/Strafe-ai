@@ -5,13 +5,13 @@ import random, time, html as H
 
 st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 
-INPUT_HTML = '<div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">↑</button></div>'
+INPUT_HTML = '<div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">➔</button></div>'
 
 INPUT_CSS = """
-#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:8px 12px;gap:8px;width:100%;box-sizing:border-box;}
+#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:10px;width:100%;box-sizing:border-box;}
 #ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}
 #ci::placeholder{color:#6b7280;}
-#sb{width:36px;height:36px;border-radius:50%;border:none;background:#3b82f6;color:#fff;font-size:1.1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+#sb{width:38px;height:38px;border-radius:50%;border:none;background:#3b82f6;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 #sb:hover{background:#2563eb;}
 """
 
@@ -46,18 +46,19 @@ PAGE_CSS = """
 html,body,[class*="css"],.stApp,#root,.main,.block-container{font-family:'Space Grotesk',sans-serif;background-color:#0a0a0a !important;color:#ececec !important;}
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 #MainMenu,footer,header{visibility:hidden;}
-section.main .block-container{padding-left:1rem;padding-right:1rem;max-width:760px;overflow-x:hidden;}
-.user-bubble-row{display:flex;justify-content:flex-end;width:100%;margin:10px 0;overflow:hidden;}
-.user-bubble{background:#3f3f3f !important;color:#fff !important;border-radius:26px;padding:12px 20px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;overflow-wrap:anywhere;}
-div[data-testid="stChatMessage"]{background:transparent !important;border:none !important;padding:6px 0;overflow:hidden;}
+section.main .block-container{padding-left:1rem;padding-right:1rem;max-width:760px;overflow-x:hidden;padding-bottom:120px !important;}
+
+div[data-testid="stChatMessage"]{background:transparent !important;border:none !important;padding:6px 0;overflow:visible !important;}
 div[data-testid^="stChatMessageAvatar"]{display:none !important;}
-div[data-testid="stChatMessage"] div[data-testid="stChatMessageContent"]{background:transparent !important;max-width:100%;padding:0;}
+div[data-testid="stChatMessage"] div[data-testid="stChatMessageContent"]{background:transparent !important;max-width:100%;padding:0;overflow:visible !important;}
 div[data-testid="stChatMessage"] .stMarkdown p{color:#ececec !important;font-size:1.08rem;line-height:1.6;margin:0 0 6px 0;overflow-wrap:anywhere;}
+
 div[data-testid="stHorizontalBlock"]{gap:0.25rem !important;flex-wrap:nowrap !important;}
 div[data-testid="stHorizontalBlock"] > div{flex:0 0 auto !important;width:auto !important;}
-div[data-testid="stChatMessage"] button{background:transparent !important;border:none !important;color:#8a8a8a !important;font-size:1.1rem !important;padding:2px 10px !important;min-width:0 !important;height:auto !important;}
+div[data-testid="stChatMessage"] button{background:transparent !important;border:none !important;color:#8a8a8a !important;font-size:1.2rem !important;padding:4px 12px !important;min-width:0 !important;height:auto !important;}
 div[data-testid="stChatMessage"] button:hover{color:#fff !important;}
 div[data-testid="stChatMessage"] button p{margin:0 !important;}
+
 .brand{text-align:center;padding:28px 0 6px 0;font-size:1.5rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 </style>
 """
@@ -139,24 +140,31 @@ if regen is not None:
 for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
         safe = H.escape(m["content"]).replace("\n", "<br>")
-        st.markdown(f'<div class="user-bubble-row"><div class="user-bubble">{safe}</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="display:flex;justify-content:flex-end;width:100%;margin:10px 0;">'
+            f'<div style="background:#3f3f3f;color:#fff;border-radius:26px;padding:12px 20px;'
+            f'max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;'
+            f'word-wrap:break-word;overflow-wrap:anywhere;">{safe}</div></div>',
+            unsafe_allow_html=True
+        )
     else:
         with st.chat_message("assistant"):
             st.markdown(m["content"])
             c1, c2, _ = st.columns([1, 1, 18])
             with c1:
-                if st.button("⧉", key=f"c{i}"):
+                if st.button("", key=f"c{i}"):
                     st.session_state["copy"] = None if st.session_state.get("copy") == i else i
             with c2:
-                if st.button("🔁", key=f"r{i}"):
+                if st.button("↻", key=f"r{i}"):
                     st.session_state["regen"] = i
                     st.rerun()
             if st.session_state.get("copy") == i:
                 st.code(m["content"])
 
-prompt = get_prompt()
+with st.bottom():
+    prompt = get_prompt()
+
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     c, s, t = ask(prompt)
-    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t})
-    st.rerun()
+    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok
