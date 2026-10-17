@@ -12,31 +12,42 @@ html,body,[class*="css"],.stApp,#root,.main,.block-container{
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 #MainMenu,footer,header{visibility:hidden;}
 section.main .block-container{padding-left:1rem;padding-right:1rem;max-width:760px;overflow-x:hidden;}
+section.main{padding-bottom:230px !important;}
 
-/* input box */
-div[data-testid="stContainer"]{background:#1e1f22 !important;border:1px solid #333 !important;
-    border-radius:28px !important;padding:14px 16px 10px 16px !important;}
-div[data-testid="stContainer"] textarea{background:transparent !important;color:#fff !important;
-    border:none !important;font-size:1.05rem !important;resize:none !important;}
-div[data-testid="stContainer"] div[data-testid="stTextInput"],
-div[data-testid="stContainer"] div[data-testid="stTextArea"]{margin-bottom:4px;}
+/* FORCE columns horizontal on mobile */
+div[data-testid="stHorizontalBlock"]{flex-direction:row !important;flex-wrap:nowrap !important;gap:0.5rem !important;align-items:center;}
+div[data-testid="stHorizontalBlock"] > div{flex:0 0 auto !important;width:auto !important;}
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stSegmentedControl"]) > div:nth-child(2){flex:1 1 auto !important;}
 
-/* pills */
-div[data-testid="stCheckbox"] label{border:1px solid #444;border-radius:999px;padding:6px 16px;
-    background:transparent;cursor:pointer;display:inline-flex;align-items:center;}
-div[data-testid="stCheckbox"] input{display:none;}
-div[data-testid="stCheckbox"] p{color:#e8e8e8 !important;margin:0;font-size:0.95rem;}
-div[data-testid="stCheckbox"] label:has(input:checked){border-color:#5b7cfa;background:#26304a;}
-div[data-testid="stCheckbox"] label:has(input:checked) p{color:#8fa5ff !important;}
-div[data-testid="stCheckbox"] input:checked ~ p,
-div[data-testid="stCheckbox"] input:checked + div p{color:#8fa5ff !important;}
+/* input box pinned to bottom */
+div[data-testid="stContainer"]{position:fixed !important;
+    bottom:calc(10px + env(safe-area-inset-bottom)) !important;
+    left:10px !important;right:10px !important;margin:0 auto !important;max-width:760px !important;
+    background:#1e1f22 !important;border:1px solid #333 !important;border-radius:28px !important;
+    padding:12px 14px 10px 14px !important;z-index:999 !important;}
+div[data-testid="stContainer"] div[data-testid="stTextArea"],div[data-testid="stContainer"] .stTextArea{
+    background:transparent !important;border:none !important;box-shadow:none !important;padding:0 !important;}
+div[data-testid="stContainer"] textarea{background:transparent !important;border:none !important;
+    box-shadow:none !important;color:#fff !important;height:44px !important;min-height:44px !important;
+    resize:none !important;font-size:1.05rem !important;padding:8px 4px !important;}
 
-/* circle buttons in pill row */
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stCheckbox"]) button{
+/* think/search pills */
+div[data-testid="stSegmentedControl"]{background:transparent !important;border:none !important;gap:8px !important;}
+div[data-testid="stSegmentedControl"] button{border:1px solid #444 !important;border-radius:999px !important;
+    background:transparent !important;color:#e8e8e8 !important;padding:6px 16px !important;font-size:0.95rem !important;}
+div[data-testid="stSegmentedControl"] button[aria-checked="true"],
+div[data-testid="stSegmentedControl"] button[aria-pressed="true"]{
+    border-color:#5b7cfa !important;background:#26304a !important;color:#8fa5ff !important;}
+
+/* + and send circles (cols 3 and 4 of the pill row) */
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stSegmentedControl"]) > div:nth-child(3) button,
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stSegmentedControl"]) > div:nth-child(4) button{
     background:transparent !important;border:1.5px solid #bbb !important;color:#fff !important;
-    border-radius:50% !important;min-width:42px !important;width:42px !important;height:42px !important;
+    border-radius:50% !important;width:42px !important;height:42px !important;min-width:42px !important;
     padding:0 !important;font-size:1.1rem !important;line-height:1 !important;}
-div[data-testid="stHorizontalBlock"]:has(div[data-testid="stCheckbox"]) > div{display:flex;align-items:center;}
+/* send = blue (it only exists when there's text) */
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stSegmentedControl"]) > div:nth-child(4) button{
+    background:#4c6ef5 !important;border-color:#4c6ef5 !important;}
 
 /* chat */
 .user-bubble-row{display:flex;justify-content:flex-start;width:100%;margin:10px 0;overflow:hidden;}
@@ -70,8 +81,6 @@ I match your energy—you're casual, I'm casual. You're serious, I'm serious. No
 I hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it
 I also don't pretend to be something I'm not. You asked earlier—I gave you the honest answer instead of the corporate "I'm just a helpful AI" response."""
 
-st.session_state.setdefault("think", False)
-st.session_state.setdefault("search", False)
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -99,12 +108,12 @@ def web_search(q):
 
 def build_payload(prompt):
     model = pick_model()
-    if st.session_state.search:
+    if st.session_state.get("search"):
         ctx = web_search(prompt)
         if ctx:
             prompt = f"Web search results:\n{ctx}\n\nQuestion: {prompt}"
     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-    think = st.session_state.think
+    think = st.session_state.get("think")
     if "gpt-oss" in model:
         if history and history[0]["role"] == "user":
             history[0] = {"role": "user", "content": SYSTEM + "\n\n" + history[0]["content"]}
@@ -139,29 +148,22 @@ def ask(prompt):
         return content, secs, f"{used} tok · {kwargs['model']}"
     raise RuntimeError(last_err or "Groq call failed")
 
-# ---- input box ----
+# ---- pinned input box ----
 with st.container(border=True):
     txt = st.text_area("msg", placeholder="Type a message", label_visibility="collapsed",
-                       height=64, key="msgbox")
-    c1, c2, _, c4, c5, c6 = st.columns([2, 2, 6, 1, 1, 1])
-    with c1:
-        if st.session_state.pop("think_clicked", False):
-            st.session_state.think = not st.session_state.think
-    with c1:
-        st.checkbox("⚛ Think", key="think_cb", on_change=lambda: st.session_state.update(think=st.session_state.think_cb))
-    with c2:
-        st.checkbox("⌕ Search", key="search_cb", on_change=lambda: st.session_state.update(search=st.session_state.search_cb))
-    with c4:
+                       key="msgbox", height=48)
+    r1, r2, r3, r4 = st.columns([6, 3, 1, 1])
+    with r1:
+        sel = st.segmented_control("mode", ["⚛ Think", "⌕ Search"], selection_mode="multi",
+                                   key="modes", label_visibility="collapsed", default=[])
+    st.session_state.think = "⚛ Think" in sel
+    st.session_state.search = "⌕ Search" in sel
+    with r3:
         st.button("+", key="plus_dead")
-    with c5:
-        st.button("🎙️", key="mic_dead")
-    with c6:
-        send = st.button("↑", key="send_btn")
-    if txt.strip():
-        st.markdown('<style>div[data-testid="stHorizontalBlock"]:has(div[data-testid="stCheckbox"]) > div:last-child button{background:#4c6ef5 !important;border-color:#4c6ef5 !important;}</style>', unsafe_allow_html=True)
-
-st.session_state.think = st.session_state.get("think_cb", False)
-st.session_state.search = st.session_state.get("search_cb", False)
+    send = False
+    with r4:
+        if txt.strip():
+            send = st.button("↑", key="send_btn")
 
 submitted = send or "\n" in txt
 prompt = txt.strip()
