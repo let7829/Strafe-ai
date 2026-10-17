@@ -1,6 +1,6 @@
 import streamlit as st
 from groq import Groq, NotFoundError
-import random, time
+import random, time, html as H
 
 st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 
@@ -11,34 +11,34 @@ html,body,[class*="css"]{font-family:'Space Grotesk',sans-serif;}
 .stApp{background:#101010;}
 #MainMenu,footer,header{visibility:hidden;}
 
-/* chat rows */
+/* user bubble: plain HTML, pinned LEFT */
+.user-bubble-row{display:flex;justify-content:flex-start;margin:10px 0;}
+.user-bubble{
+    background:#3f3f3f;color:#fff;border-radius:26px;
+    padding:12px 20px;max-width:80%;font-size:1.05rem;line-height:1.5;
+    word-wrap:break-word;
+}
+
+/* assistant: strip Streamlit's default bubble/avatar */
 div[data-testid="stChatMessage"]{background:transparent;border:none;padding:6px 0;}
 div[data-testid^="stChatMessageAvatar"]{display:none;}
-
-/* user bubble: pushed LEFT per your request */
-.user-row div[data-testid="stChatMessageContent"]{
-    background:#3f3f3f;border-radius:26px;padding:12px 20px;
-    max-width:80%;display:inline-block;
+div[data-testid="stChatMessage"] div[data-testid="stChatMessageContent"]{
+    background:transparent;max-width:100%;padding:0;
 }
-.user-row .stMarkdown p{color:#fff;font-size:1.05rem;margin:0;}
-
-/* assistant: plain left text */
-div[data-testid="stChatMessage"]:not(.user-row) div[data-testid="stChatMessageContent"]{
-    background:transparent;max-width:100%;
-}
-div[data-testid="stChatMessage"]:not(.user-row) .stMarkdown p{
-    color:#ececec;font-size:1.08rem;line-height:1.6;
+div[data-testid="stChatMessage"] .stMarkdown p{
+    color:#ececec;font-size:1.08rem;line-height:1.6;margin:0 0 6px 0;
 }
 
-/* action button row: force horizontal, kill gaps */
-div[data-testid="stHorizontalBlock"]{gap:0.25rem !important;}
+/* action buttons: force horizontal, kill gaps */
+div[data-testid="stHorizontalBlock"]{gap:0.25rem !important;flex-wrap:nowrap !important;}
 div[data-testid="stHorizontalBlock"] > div{flex:0 0 auto !important;width:auto !important;}
 div[data-testid="stChatMessage"] button{
-    background:transparent;border:none;color:#8a8a8a;
-    font-size:1.1rem;padding:2px 10px;min-width:0;
+    background:transparent !important;border:none !important;color:#8a8a8a !important;
+    font-size:1.1rem !important;padding:2px 10px !important;min-width:0 !important;
+    height:auto !important;
 }
-div[data-testid="stChatMessage"] button:hover{color:#fff;}
-div[data-testid="stChatMessage"] button p{margin:0;}
+div[data-testid="stChatMessage"] button:hover{color:#fff !important;}
+div[data-testid="stChatMessage"] button p{margin:0 !important;}
 
 /* input */
 div[data-testid="stChatInput"]{border-radius:999px;border:1px solid #2a2a2a;background:#1a1a1a;}
@@ -100,15 +100,11 @@ if regen is not None:
 
 for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
-        # inject class so CSS can target the user row reliably (no :has needed)
-        st.markdown('<div class="user-row">', unsafe_allow_html=True)
-        with st.chat_message("user"):
-            st.markdown(m["content"])
-        st.markdown('</div>', unsafe_allow_html=True)
+        safe = H.escape(m["content"]).replace("\n", "<br>")
+        st.markdown(f'<div class="user-bubble-row"><div class="user-bubble">{safe}</div></div>', unsafe_allow_html=True)
     else:
         with st.chat_message("assistant"):
             st.markdown(m["content"])
-            # horizontal action row: copy + regenerate only
             c1, c2, _ = st.columns([1, 1, 18])
             with c1:
                 if st.button("⧉", key=f"c{i}"):
