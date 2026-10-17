@@ -8,34 +8,35 @@ HTML = """
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
 html,body,[class*="css"]{font-family:'Space Grotesk',sans-serif;}
-.stApp{background:#101010;}
+html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 #MainMenu,footer,header{visibility:hidden;}
+section.main .block-container{padding-left:1rem;padding-right:1rem;max-width:760px;overflow-x:hidden;}
 
-/* user bubble: plain HTML, pinned LEFT */
-.user-bubble-row{display:flex;justify-content:flex-start;margin:10px 0;}
+/* user bubble: pinned LEFT */
+.user-bubble-row{display:flex;justify-content:flex-start;width:100%;margin:10px 0;overflow:hidden;}
 .user-bubble{
     background:#3f3f3f;color:#fff;border-radius:26px;
-    padding:12px 20px;max-width:80%;font-size:1.05rem;line-height:1.5;
-    word-wrap:break-word;
+    padding:12px 20px;max-width:80%;width:fit-content;
+    font-size:1.05rem;line-height:1.5;word-wrap:break-word;overflow-wrap:anywhere;
 }
 
-/* assistant: strip Streamlit's default bubble/avatar */
-div[data-testid="stChatMessage"]{background:transparent;border:none;padding:6px 0;}
-div[data-testid^="stChatMessageAvatar"]{display:none;}
+/* assistant: strip avatar + bubble */
+div[data-testid="stChatMessage"]{background:transparent;border:none;padding:6px 0;overflow:hidden;}
+div[data-testid^="stChatMessageAvatar"]{display:none !important;}
 div[data-testid="stChatMessage"] div[data-testid="stChatMessageContent"]{
     background:transparent;max-width:100%;padding:0;
 }
 div[data-testid="stChatMessage"] .stMarkdown p{
     color:#ececec;font-size:1.08rem;line-height:1.6;margin:0 0 6px 0;
+    overflow-wrap:anywhere;
 }
 
-/* action buttons: force horizontal, kill gaps */
+/* action buttons: force horizontal */
 div[data-testid="stHorizontalBlock"]{gap:0.25rem !important;flex-wrap:nowrap !important;}
 div[data-testid="stHorizontalBlock"] > div{flex:0 0 auto !important;width:auto !important;}
 div[data-testid="stChatMessage"] button{
     background:transparent !important;border:none !important;color:#8a8a8a !important;
-    font-size:1.1rem !important;padding:2px 10px !important;min-width:0 !important;
-    height:auto !important;
+    font-size:1.1rem !important;padding:2px 10px !important;min-width:0 !important;height:auto !important;
 }
 div[data-testid="stChatMessage"] button:hover{color:#fff !important;}
 div[data-testid="stChatMessage"] button p{margin:0 !important;}
@@ -57,6 +58,11 @@ st.markdown('<div class="brand">STRAFE AI</div>', unsafe_allow_html=True)
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
 PREFERRED = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"]
 
+SYSTEM = """I keep it direct and simple. No fluff, no long explanations unless you ask for them.
+I match your energy—you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.
+I hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it
+I also don't pretend to be something I'm not. You asked earlier—I gave you the honest answer instead of the corporate "I'm just a helpful AI" response."""
+
 def pick_model():
     if "model" in st.session_state:
         return st.session_state.model
@@ -76,19 +82,26 @@ def ask(prompt):
     last_err = None
     for _ in range(2):
         model = pick_model()
+        kwargs = dict(
+            model=model,
+            messages=[{"role": "system", "content": SYSTEM},
+                      {"role": "user", "content": prompt}],
+            max_completion_tokens=1024,
+            temperature=0.7,
+        )
+        if "gpt-oss" in model:
+            kwargs["reasoning_effort"] = "none"
         try:
-            r = Groq(api_key=random.choice(KEYS)).chat.completions.create(
-                model=model,
-                messages=[{"role": "system", "content": "Be direct. No fluff."},
-                          {"role": "user", "content": prompt}],
-                max_tokens=150)
-            secs = max(1, round(time.time() - t0))
-            return r.choices[0].message.content, secs, f"{r.usage.total_tokens} tok · {model}"
+            r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
         except NotFoundError:
-            st.session_state.pop("model", None)
-            last_err = f"model {model} gone"
-        except Exception as e:
-            last_err = str(e)[:80]; break
+            st.session_state.pop("model", None); last_err = f"model {model} gone"; continue
+        except TypeError:
+            kwargs.pop("reasoning_effort", None)
+            r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
+        content = (getattr(r.choices[0].message, "content", None) or "").strip()
+        secs = max(1, round(time.time() - t0))
+        used = r.usage.total_tokens if r.usage else "?"
+        return content, secs, f"{used} tok · {model}"
     raise RuntimeError(last_err or "Groq call failed")
 
 regen = st.session_state.pop("regen", None)
