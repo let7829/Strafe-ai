@@ -5,7 +5,7 @@ import random, time, html as H
 
 st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 
-INPUT_HTML = '<div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">\u27a4</button></div>'
+INPUT_HTML = '<div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">➔</button></div>'
 INPUT_CSS = "#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:10px;width:100%;box-sizing:border-box;}#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}#ci::placeholder{color:#6b7280;}#sb{width:38px;height:38px;border-radius:50%;border:none;background:#3b82f6;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}#sb:hover{background:#2563eb;}"
 INPUT_JS = "export default function(component){const{parentElement,setTriggerValue}=component;const input=parentElement.querySelector('#ci');const btn=parentElement.querySelector('#sb');if(!input||!btn)return;function send(){const val=input.value.trim();if(!val)return;setTriggerValue('submitted',val);input.value='';}btn.onclick=send;input.onkeydown=function(e){if(e.key==='Enter')send();};}"
 
@@ -88,6 +88,9 @@ if regen is not None:
     c, s, t = ask(p)
     st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t})
 
+COPY_GLYPH = "⎙"   <<< copy button glyph
+RETRY_GLYPH = "↻"  <<< retry button glyph
+
 for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
         safe = H.escape(m["content"]).replace("\n", "<br>")
@@ -97,4 +100,22 @@ for i, m in enumerate(st.session_state.messages):
             st.markdown(m["content"])
             c1, c2, _ = st.columns([1, 1, 18])
             with c1:
-                if st.button("\u23
+                if st.button(COPY_GLYPH, key=f"c{i}"):
+                    st.session_state["copy"] = None if st.session_state.get("copy") == i else i
+            with c2:
+                if st.button(RETRY_GLYPH, key=f"r{i}"):
+                    st.session_state["regen"] = i
+                    st.rerun()
+            if st.session_state.get("copy") == i:
+                st.code(m["content"])
+
+with st.container():
+    st.markdown('<div class="fixed-input">', unsafe_allow_html=True)
+    prompt = get_prompt()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+if prompt:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    c, s, t = ask(prompt)
+    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t})
+    st.rerun()
