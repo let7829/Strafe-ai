@@ -1,3 +1,4 @@
+
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
@@ -42,16 +43,13 @@ div[data-testid='stChatMessage'] button{background:transparent !important;border
 div[data-testid='stChatMessage'] button:hover{color:#fff !important;}
 div[data-testid='stChatMessage'] button p{margin:0 !important;}
 .brand{text-align:center;padding:28px 0 6px 0;font-size:1.5rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
-.bottom-bar{position:fixed !important;bottom:0 !important;left:0 !important;right:0 !important;padding:12px 16px !important;background:#0a0a0a !important;z-index:999999 !important;}
 .user-bubble{display:flex;justify-content:flex-end;width:100%;margin:10px 0;}
 .user-bubble-inner{background:#3f3f3f;color:#fff;border-radius:26px;padding:12px 20px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
+div[data-testid='stVerticalBlock']:has(> div[data-testid='stComponent']){position:fixed !important;bottom:0 !important;left:0 !important;right:0 !important;padding:12px 16px !important;background:#0a0a0a !important;z-index:999999 !important;}
 </style>
 """
 
-try:
-    st.html(CSS)
-except Exception:
-    st.markdown(CSS, unsafe_allow_html=True)
+st.html(CSS)
 
 st.markdown("<div class='brand'>STRAFE AI</div>", unsafe_allow_html=True)
 
@@ -120,7 +118,7 @@ if regen is not None:
 for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
         safe = H.escape(m["content"]).replace("\n", "<br>")
-        st.markdown(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>', unsafe_allow_html=True)
+        st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>')
     else:
         with st.chat_message("assistant"):
             st.markdown(m["content"])
@@ -135,9 +133,7 @@ for i, m in enumerate(st.session_state.messages):
             if st.session_state.get("copy") == i:
                 st.code(m["content"])
 
-st.markdown('<div class="bottom-bar">', unsafe_allow_html=True)
 prompt = get_prompt()
-st.markdown('</div>', unsafe_allow_html=True)
 
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
