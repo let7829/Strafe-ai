@@ -10,19 +10,40 @@ HTML = """
 html,body,[class*="css"]{font-family:'Space Grotesk',sans-serif;}
 .stApp{background:#101010;}
 #MainMenu,footer,header{visibility:hidden;}
+
+/* chat rows */
 div[data-testid="stChatMessage"]{background:transparent;border:none;padding:6px 0;}
 div[data-testid^="stChatMessageAvatar"]{display:none;}
-div[data-testid="stChatMessage"]:has(div[data-testid^="stChatMessageAvatarUser"]){flex-direction:row-reverse;}
-div[data-testid="stChatMessage"]:has(div[data-testid^="stChatMessageAvatarUser"]) div[data-testid="stChatMessageContent"]{background:#3f3f3f;border-radius:26px;padding:12px 20px;max-width:80%;flex:0 1 auto;}
-div[data-testid="stChatMessage"]:has(div[data-testid^="stChatMessageAvatarUser"]) .stMarkdown p{color:#fff;font-size:1.05rem;margin:0;}
-div[data-testid="stChatMessage"]:has(div[data-testid^="stChatMessageAvatarAssistant"]) div[data-testid="stChatMessageContent"]{background:transparent;max-width:100%;}
-div[data-testid="stChatMessage"]:has(div[data-testid^="stChatMessageAvatarAssistant"]) .stMarkdown p{color:#ececec;font-size:1.08rem;line-height:1.6;}
-div[data-testid="stExpander"] details{background:transparent;border:none;padding:0;}
-div[data-testid="stExpander"] summary{color:#9a9a9a;font-size:0.95rem;}
-div[data-testid="stChatMessage"] button{background:transparent;border:none;color:#8a8a8a;font-size:1rem;padding:2px 8px;}
+
+/* user bubble: pushed LEFT per your request */
+.user-row div[data-testid="stChatMessageContent"]{
+    background:#3f3f3f;border-radius:26px;padding:12px 20px;
+    max-width:80%;display:inline-block;
+}
+.user-row .stMarkdown p{color:#fff;font-size:1.05rem;margin:0;}
+
+/* assistant: plain left text */
+div[data-testid="stChatMessage"]:not(.user-row) div[data-testid="stChatMessageContent"]{
+    background:transparent;max-width:100%;
+}
+div[data-testid="stChatMessage"]:not(.user-row) .stMarkdown p{
+    color:#ececec;font-size:1.08rem;line-height:1.6;
+}
+
+/* action button row: force horizontal, kill gaps */
+div[data-testid="stHorizontalBlock"]{gap:0.25rem !important;}
+div[data-testid="stHorizontalBlock"] > div{flex:0 0 auto !important;width:auto !important;}
+div[data-testid="stChatMessage"] button{
+    background:transparent;border:none;color:#8a8a8a;
+    font-size:1.1rem;padding:2px 10px;min-width:0;
+}
 div[data-testid="stChatMessage"] button:hover{color:#fff;}
+div[data-testid="stChatMessage"] button p{margin:0;}
+
+/* input */
 div[data-testid="stChatInput"]{border-radius:999px;border:1px solid #2a2a2a;background:#1a1a1a;}
 div[data-testid="stChatInput"] textarea{background:transparent;color:#fff;}
+
 .brand{text-align:center;padding:28px 0 6px 0;font-size:1.5rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 </style>
 """
@@ -64,11 +85,10 @@ def ask(prompt):
             secs = max(1, round(time.time() - t0))
             return r.choices[0].message.content, secs, f"{r.usage.total_tokens} tok · {model}"
         except NotFoundError:
-            st.session_state.pop("model", None)   # re-detect
+            st.session_state.pop("model", None)
             last_err = f"model {model} gone"
         except Exception as e:
-            last_err = str(e)[:80]
-            break
+            last_err = str(e)[:80]; break
     raise RuntimeError(last_err or "Groq call failed")
 
 regen = st.session_state.pop("regen", None)
@@ -80,27 +100,25 @@ if regen is not None:
 
 for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
+        # inject class so CSS can target the user row reliably (no :has needed)
+        st.markdown('<div class="user-row">', unsafe_allow_html=True)
         with st.chat_message("user"):
             st.markdown(m["content"])
+        st.markdown('</div>', unsafe_allow_html=True)
     else:
         with st.chat_message("assistant"):
-            with st.expander(f"Thought for {m['secs']} seconds"):
-                st.caption(m["tok"])
             st.markdown(m["content"])
+            # horizontal action row: copy + regenerate only
+            c1, c2, _ = st.columns([1, 1, 18])
+            with c1:
+                if st.button("⧉", key=f"c{i}"):
+                    st.session_state["copy"] = None if st.session_state.get("copy") == i else i
+            with c2:
+                if st.button("🔁", key=f"r{i}"):
+                    st.session_state["regen"] = i
+                    st.rerun()
             if st.session_state.get("copy") == i:
                 st.code(m["content"])
-            c1, c2, c3, c4, _ = st.columns([1, 1, 1, 1, 16])
-            if c1.button("⧉", key=f"c{i}"):
-                st.session_state["copy"] = None if st.session_state.get("copy") == i else i
-            if c2.button("👍", key=f"u{i}"):
-                st.session_state["fb"] = (i, "up")
-            if c3.button("👎", key=f"d{i}"):
-                st.session_state["fb"] = (i, "down")
-            if c4.button("🔁", key=f"r{i}"):
-                st.session_state["regen"] = i
-                st.rerun()
-            if st.session_state.get("fb", (None,))[0] == i:
-                st.caption("logged " + st.session_state["fb"][1])
 
 if prompt := st.chat_input("Ask something"):
     st.session_state.messages.append({"role": "user", "content": prompt})
