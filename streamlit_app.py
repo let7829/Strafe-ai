@@ -3,7 +3,7 @@ import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
 import random, time, html as H
 
-st.set_page_config(page_title="Strafe AI", page_icon="\u26a1", layout="centered")
+st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 
 SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
@@ -33,7 +33,7 @@ CSS = """
 <style>
 html,body,[class*='css'],.stApp,#root,.main,.block-container{font-family:'Space Grotesk',sans-serif;background-color:#0a0a0a !important;color:#ececec !important;}
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
-#MainMenu,footer,header{visibility:hidden !important;}
+#MainMenu,footer,header{visibility:hidden;}
 section.main .block-container{padding:0 1rem 130px 1rem !important;max-width:760px;overflow-x:hidden;}
 div[data-testid='stVerticalBlock']{gap:0 !important;}
 div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:8px 0 0 0 !important;margin:0 !important;overflow:visible !important;}
@@ -53,6 +53,12 @@ div[data-testid='stPopover'] button p{margin:0 !important;}
 """
 
 st.html(CSS)
+st.markdown("""
+<style>
+footer {visibility: hidden;}
+div[data-testid="stAppViewContainer"] > div:last-child {display: none !important;}
+</style>
+""", unsafe_allow_html=True)
 st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
