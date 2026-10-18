@@ -1,8 +1,11 @@
+
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
 import random, time, html as H
 from datetime import datetime
+import requests
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 
@@ -95,6 +98,9 @@ div[data-testid='stPopover'] button p{margin:0 !important;}
 .info-line span{color:#bdbdbd;}
 .close-row button{background:transparent !important;border:none !important;color:#7a7a7a !important;font-size:0.85rem !important;padding:2px 8px !important;box-shadow:none !important;}
 .close-row button:hover{color:#fff !important;}
+div[data-testid='stExpander'] details{background:#1a1a1a !important;border:1px solid #2a2a2a !important;border-radius:12px !important;padding:8px 12px !important;margin:8px 0 !important;}
+div[data-testid='stExpander'] summary{color:#8a8a8a !important;font-size:0.85rem !important;cursor:pointer !important;}
+div[data-testid='stExpander'] .stMarkdown{color:#bdbdbd !important;font-size:0.9rem !important;}
 </style>
 """
 
@@ -119,24 +125,124 @@ def pick_model():
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-def build_payload(history, use_search=False):
+def web_search(query, num_results=3):
+    try:
+        url = "https://html.duckduckgo.com/html/"
+        params = {"q": query}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+        for item in soup.select(".result")[:num_results]:
+            title_tag = item.select_one(".result__title a")
+            snippet_tag = item.select_one(".result__snippet")
+            if not title_tag:
+                continue
+            title = title_tag.get_text(strip=True)
+            link = title_tag["href"]
+            snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
+            results.append({"title": title, "link": link, "snippet": snippet})
+        if not results:
+            for item in soup.select(".result__body")[:num_results]:
+                title_tag = item.select_one(".result__title a")
+                snippet_tag = item.select_one(".result__snippet")
+                if title_tag:
+                    title = title_tag.get_text(strip=True)
+                    link = title_tag["href"]
+                    snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
+                    results.append({"title": title, "link": link, "snippet": snippet})
+        if not results:
+            return [{"title": "No results", "link": "", "snippet": "No results found"}]
+        return results
+    except Exception as e:
+        return [{"title": "Search error", "link": "", "snippet": str(e)}]
+
+def fetch_url(url, max_chars=1500):
+    try:
+        response = requests.get(url, timeout=5, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        soup = BeautifulSoup(response.text, 'html.parser')
+        for script in soup(["script", "style"]):
+            script.decompose()
+        text = soup.get_text(separator=' ', strip=True)
+        text = ' '.join(text.split())
+        return text[:max_chars]
+    except Exception as e:
+        return f"Could not fetch URL: {e}"
+
+def build_payload(history):
     model = pick_model()
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
-    if use_search:
-        kw["tools"] = [{"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}]
-        kw["tool_choice"] = "auto"
     if "qwen" in model:
         kw["reasoning_effort"] = "none"
         kw["reasoning_format"] = "hidden"
     return kw
 
-def ask(use_search=False):
+def ask(use_search=False, use_think=False, search_query=None):
     t0 = time.time()
     last_err = None
     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    
+    if use_search and search_query:
+        search_container = st.empty()
+        search_container.html('<div class="info-line">⌕ <span>searching...</span></div>')
+        results = web_search(search_query)
+        context_parts = []
+        for r in results[:2]:
+            if r["link"]:
+                page_text = fetch_url(r["link"])
+                context_parts.append(f"Source: {r['title']}\n{page_text}")
+        search_context = "\n\n".join(context_parts)
+        history.append({
+            "role": "system",
+            "content": f"Web search results for '{search_query}':\n\n{search_context}\n\nUse this information to answer the user's question."
+        })
+        search_container.empty()
+    
+    total_tokens = 0
+    
+    if use_think:
+        think_container = st.empty()
+        think_container.html('<div class="info-line">⚛︎ <span>thinking...</span></div>')
+        
+        thinking_messages = history.copy()
+        thinking_messages.append({
+            "role": "user",
+            "content": "Think through this step by step. Show your reasoning, notes, and plan clearly. Write your internal thoughts below:"
+        })
+        
+        try:
+            think_r = Groq(api_key=random.choice(KEYS)).chat.completions.create(
+                model=pick_model(),
+                messages=thinking_messages,
+                max_completion_tokens=600,
+                temperature=0.7
+            )
+            thinking_text = (getattr(think_r.choices[0].message, "content", None) or "").strip()
+            total_tokens += think_r.usage.total_tokens if think_r.usage else 0
+            
+            think_container.empty()
+            
+            with st.expander("⚛︎ thinking process", expanded=False):
+                st.markdown(thinking_text)
+            
+            history.append({
+                "role": "system",
+                "content": f"Internal reasoning: {thinking_text}\n\nNow provide the final polished response based on this reasoning."
+            })
+        except Exception as e:
+            think_container.empty()
+            history.append({
+                "role": "system",
+                "content": "Thinking process failed. Provide a direct answer."
+            })
+    
     for _ in range(2):
-        kwargs = build_payload(history, use_search)
+        kwargs = build_payload(history)
         try:
             r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
         except NotFoundError:
@@ -146,30 +252,9 @@ def ask(use_search=False):
         except Exception as e:
             last_err = str(e)[:120]
             break
-        
-        content = ""
-        if hasattr(r.choices[0].message, "tool_calls") and r.choices[0].message.tool_calls:
-            tool_call = r.choices[0].message.tool_calls[0]
-            if tool_call.function.name == "web_search":
-                import json
-                args = json.loads(tool_call.function.arguments)
-                query = args.get("query", "")
-                try:
-                    from duckduckgo_search import DDGS
-                    with DDGS() as ddgs:
-                        results = list(ddgs.text(query, max_results=3))
-                    context = "\n".join([f"- {r['title']}: {r['body']}" for r in results])
-                    history.append({"role": "assistant", "content": None, "tool_calls": r.choices[0].message.tool_calls})
-                    history.append({"role": "tool", "tool_call_id": tool_call.id, "content": context})
-                    r2 = Groq(api_key=random.choice(KEYS)).chat.completions.create(**build_payload(history, False))
-                    content = (getattr(r2.choices[0].message, "content", None) or "").strip()
-                except Exception:
-                    content = "(search failed)"
-        else:
-            content = (getattr(r.choices[0].message, "content", None) or "").strip()
-        
+        content = (getattr(r.choices[0].message, "content", None) or "").strip()
         secs = max(0.1, time.time() - t0)
-        used = r.usage.total_tokens if r.usage else 0
+        used = (r.usage.total_tokens if r.usage else 0) + total_tokens
         tps = round(used / secs, 1) if used else 0
         return content, round(secs, 1), f"{tps} tok/s"
     raise RuntimeError(last_err or "Groq call failed")
@@ -188,9 +273,10 @@ act = st.session_state.pop("act", None)
 if act:
     kind, i = act
     if kind == "retry" and i > 0 and st.session_state.messages[i - 1]["role"] == "user":
+        prev_msg = st.session_state.messages[i - 1]
         st.session_state.messages = st.session_state.messages[:i]
-        c, s, t = ask(use_search=st.session_state.messages[-1].get("search", False) if st.session_state.messages else False)
-        st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": st.session_state.messages[-1].get("search", False) if st.session_state.messages else False, "think": st.session_state.messages[-1].get("think", False) if st.session_state.messages else False})
+        c, s, t = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False), search_query=prev_msg["content"] if prev_msg.get("search") else None)
+        st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": prev_msg.get("search", False), "think": prev_msg.get("think", False)})
         st.session_state["show"] = None
     elif kind == "info":
         cur = st.session_state.get("show")
@@ -206,8 +292,9 @@ if pending is not None:
     text = pending.get("text", "") if isinstance(pending, dict) else pending
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
+    
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
-    c, s, t = ask(use_search=use_search)
+    c, s, t = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None)
     st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
     st.session_state["editing"] = None
     st.rerun()
