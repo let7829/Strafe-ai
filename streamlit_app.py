@@ -35,20 +35,16 @@ export default function(component){
     const btnSearch=parentElement.querySelector('#btn-search');
     const btnThink=parentElement.querySelector('#btn-think');
     if(!input||!btn)return;
-    
     let searchActive=false;
     let thinkActive=false;
-    
     function send(){
         const val=input.value.trim();
         if(!val)return;
         setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive});
         input.value='';
     }
-    
     btn.onclick=send;
     input.onkeydown=function(e){if(e.key==='Enter')send();};
-    
     btnSearch.onclick=function(){
         searchActive=!searchActive;
         this.classList.toggle('active',searchActive);
@@ -109,7 +105,6 @@ st.html("<div class='brand'>STRAFE AI</div>")
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
 PREFERRED = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768"]
 SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier\u2014I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
-
 SAFE_MODELS = {"llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768", "gemma2-9b-it"}
 
 def pick_model():
@@ -119,23 +114,19 @@ def pick_model():
         avail = {m.id for m in Groq(api_key=KEYS[0]).models.list()}
     except Exception:
         avail = set()
-    
     for p in PREFERRED:
         if p in avail:
             st.session_state.model = p
             return p
-    
     safe_avail = avail & SAFE_MODELS
     if safe_avail:
         chosen = list(safe_avail)[0]
         st.session_state.model = chosen
         return chosen
-    
     if avail:
         chosen = list(avail)[0]
         st.session_state.model = chosen
         return chosen
-    
     st.session_state.model = PREFERRED[0]
     return PREFERRED[0]
 
@@ -146,9 +137,7 @@ def web_search(query, num_results=3):
     try:
         url = "https://html.duckduckgo.com/html/"
         params = {"q": query}
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
         resp = requests.get(url, params=params, headers=headers, timeout=8)
         soup = BeautifulSoup(resp.text, "html.parser")
         results = []
@@ -178,9 +167,7 @@ def web_search(query, num_results=3):
 
 def fetch_url(url, max_chars=1500):
     try:
-        response = requests.get(url, timeout=3, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        response = requests.get(url, timeout=3, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
         soup = BeautifulSoup(response.text, 'html.parser')
         for script in soup(["script", "style"]):
             script.decompose()
@@ -204,7 +191,6 @@ def ask(use_search=False, use_think=False, search_query=None):
     last_err = None
     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
     thinking_text = None
-    
     if use_search and search_query:
         search_container = st.empty()
         search_container.html('<div class="info-line">⌕ <span>searching...</span></div>')
@@ -215,46 +201,23 @@ def ask(use_search=False, use_think=False, search_query=None):
                 page_text = fetch_url(r["link"])
                 context_parts.append(f"Source: {r['title']}\n{page_text}")
         search_context = "\n\n".join(context_parts)
-        history.append({
-            "role": "system",
-            "content": f"Web search results for '{search_query}':\n\n{search_context}\n\nUse this information to answer the user's question."
-        })
+        history.append({"role": "system", "content": f"Web search results for '{search_query}':\n\n{search_context}\n\nUse this information to answer the user's question."})
         search_container.empty()
-    
     total_tokens = 0
-    
     if use_think:
         think_container = st.empty()
         think_container.html('<div class="info-line">⚛︎ <span>thinking...</span></div>')
-        
         thinking_messages = history.copy()
-        thinking_messages.append({
-            "role": "user",
-            "content": "Think through this step by step. Show your reasoning, notes, and plan clearly. Write your internal thoughts below:"
-        })
-        
+        thinking_messages.append({"role": "user", "content": "Think through this step by step. Show your reasoning, notes, and plan clearly. Write your internal thoughts below:"})
         try:
-            think_r = Groq(api_key=random.choice(KEYS)).chat.completions.create(
-                model=pick_model(),
-                messages=thinking_messages,
-                max_completion_tokens=600,
-                temperature=0.7
-            )
+            think_r = Groq(api_key=random.choice(KEYS)).chat.completions.create(model=pick_model(), messages=thinking_messages, max_completion_tokens=600, temperature=0.7)
             thinking_text = (getattr(think_r.choices[0].message, "content", None) or "").strip()
             total_tokens += think_r.usage.total_tokens if think_r.usage else 0
-            
-            history.append({
-                "role": "system",
-                "content": f"Internal reasoning: {thinking_text}\n\nNow provide the final polished response based on this reasoning."
-            })
-        except Exception as e:
-            history.append({
-                "role": "system",
-                "content": "Thinking process failed. Provide a direct answer."
-            })
+            history.append({"role": "system", "content": f"Internal reasoning: {thinking_text}\n\nNow provide the final polished response based on this reasoning."})
+        except Exception:
+            history.append({"role": "system", "content": "Thinking process failed. Provide a direct answer."})
         finally:
             think_container.empty()
-    
     for _ in range(3):
         kwargs = build_payload(history)
         try:
@@ -270,13 +233,10 @@ def ask(use_search=False, use_think=False, search_query=None):
         secs = max(0.1, time.time() - t0)
         used = (r.usage.total_tokens if r.usage else 0) + total_tokens
         tps = round(used / secs, 1) if used else 0
-        
         if thinking_text:
             with st.expander("⚛︎ thinking process", expanded=False):
                 st.markdown(thinking_text)
-        
         return content, round(secs, 1), f"{tps} tok/s"
-    
     raise RuntimeError(last_err or "Groq call failed")
 
 def info_html(m):
@@ -284,8 +244,10 @@ def info_html(m):
     secs = m.get("secs", "?")
     tps = m.get("tok", "?")
     flags = []
-    if m.get("search"): flags.append(SEARCH_GLYPH)
-    if m.get("think"): flags.append(THINK_GLYPH)
+    if m.get("search"):
+        flags.append(SEARCH_GLYPH)
+    if m.get("think"):
+        flags.append(THINK_GLYPH)
     flag_str = " ".join(flags) + " " if flags else ""
     return f'<div class="info-line">{flag_str}sent <span>{sent}</span> &nbsp;\u00b7&nbsp; {secs}s &nbsp;\u00b7&nbsp; {tps}</div>'
 
@@ -312,7 +274,6 @@ if pending is not None:
     text = pending.get("text", "") if isinstance(pending, dict) else pending
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
-    
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
     c, s, t = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None)
     st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
@@ -344,12 +305,14 @@ for i, m in enumerate(st.session_state.messages):
                 with st.popover(MENU_GLYPH, key=f"mu{i}"):
                     st.html(info_html(m))
                     if st.button("Edit", key=f"ue{i}"):
-                        st.session_state["act"] = ("edit", i); st.rerun()
+                        st.session_state["act"] = ("edit", i)
+                        st.rerun()
             if show == ("info", i):
                 st.html(info_html(m))
                 st.markdown('<div class="close-row">', unsafe_allow_html=True)
                 if st.button(CLOSE_GLYPH + " close", key=f"cl{i}"):
-                    st.session_state["act"] = ("close", i); st.rerun()
+                    st.session_state["act"] = ("close", i)
+                    st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
     else:
         with st.chat_message("assistant"):
@@ -359,12 +322,14 @@ for i, m in enumerate(st.session_state.messages):
             with st.popover(MENU_GLYPH, key=f"ma{i}"):
                 st.html(info_html(m))
                 if st.button("Retry", key=f"ar{i}"):
-                    st.session_state["act"] = ("retry", i); st.rerun()
+                    st.session_state["act"] = ("retry", i)
+                    st.rerun()
         if show == ("info", i):
             st.html(info_html(m))
             st.markdown('<div class="close-row">', unsafe_allow_html=True)
             if st.button(CLOSE_GLYPH + " close", key=f"cla{i}"):
-                st.session_state["act"] = ("close", i); st.rerun()
+                st.session_state["act"] = ("close", i)
+                st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
 prompt = get_prompt()
