@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
 import random, time, html as H
+from datetime import datetime
 
 st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 
@@ -53,6 +54,8 @@ div[data-testid='stPopover']{margin:0 !important;max-width:100% !important;}
 div[data-testid='stPopover'] button{height:20px !important;min-height:0 !important;padding:0 4px !important;font-size:1rem !important;line-height:1 !important;color:#7a7a7a !important;background:transparent !important;border:none !important;box-shadow:none !important;}
 div[data-testid='stPopover'] button:hover{color:#fff !important;}
 div[data-testid='stPopover'] button p{margin:0 !important;}
+.info-line{color:#8a8a8a !important;font-size:0.82rem !important;line-height:1.5 !important;font-family:'Space Grotesk',sans-serif !important;padding:2px 0 6px 0;}
+.info-line span{color:#bdbdbd;}
 .close-row button{background:transparent !important;border:none !important;color:#7a7a7a !important;font-size:0.85rem !important;padding:2px 8px !important;box-shadow:none !important;}
 .close-row button:hover{color:#fff !important;}
 </style>
@@ -63,7 +66,7 @@ st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
 PREFERRED = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"]
-SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier\u2014I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response."
+SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier\u2014I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
 
 def pick_model():
     if "model" in st.session_state:
@@ -79,15 +82,14 @@ def pick_model():
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-def build_payload():
+def build_payload(history):
     model = pick_model()
-    history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
     if "gpt-oss" in model:
-        if history and history[0]["role"] == "user":
-            history[0] = {"role": "user", "content": SYSTEM + "\n\n" + history[0]["content"]}
-        else:
-            history.insert(0, {"role": "user", "content": SYSTEM})
-        return dict(model=model, messages=history, max_completion_tokens=1024, temperature=0.6, top_p=0.95, include_reasoning=False)
+        preamble = [
+            {"role": "user", "content": SYSTEM},
+            {"role": "assistant", "content": "Got it."},
+        ]
+        return dict(model=model, messages=preamble + history, max_completion_tokens=1024, temperature=0.6, top_p=0.95, include_reasoning=False)
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
     if "qwen" in model:
@@ -98,8 +100,9 @@ def build_payload():
 def ask():
     t0 = time.time()
     last_err = None
+    history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
     for _ in range(2):
-        kwargs = build_payload()
+        kwargs = build_payload(history)
         try:
             r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
         except NotFoundError:
@@ -110,10 +113,17 @@ def ask():
             last_err = str(e)[:120]
             break
         content = (getattr(r.choices[0].message, "content", None) or "").strip()
-        secs = max(1, round(time.time() - t0))
-        used = r.usage.total_tokens if r.usage else "?"
-        return content, secs, f"{used} tok"
+        secs = max(0.1, time.time() - t0)
+        used = r.usage.total_tokens if r.usage else 0
+        tps = round(used / secs, 1) if used else 0
+        return content, round(secs, 1), f"{tps} tok/s"
     raise RuntimeError(last_err or "Groq call failed")
+
+def info_html(m):
+    sent = m.get("sent", "?")
+    secs = m.get("secs", "?")
+    tps = m.get("tok", "?")
+    return f'<div class="info-line">sent <span>{sent}</span> &nbsp;·&nbsp; {secs}s &nbsp;·&nbsp; {tps}</div>'
 
 act = st.session_state.pop("act", None)
 if act:
@@ -121,11 +131,11 @@ if act:
     if kind == "retry" and i > 0 and st.session_state.messages[i - 1]["role"] == "user":
         st.session_state.messages = st.session_state.messages[:i]
         c, s, t = ask()
-        st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t})
+        st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M")})
         st.session_state["show"] = None
-    elif kind in ("copy", "select"):
+    elif kind == "info":
         cur = st.session_state.get("show")
-        st.session_state["show"] = None if cur == (kind, i) else (kind, i)
+        st.session_state["show"] = None if cur == ("info", i) else ("info", i)
     elif kind == "edit":
         st.session_state["editing"] = i
         st.session_state["show"] = None
@@ -134,9 +144,9 @@ if act:
 
 pending = st.session_state.pop("pending", None)
 if pending is not None:
-    st.session_state.messages.append({"role": "user", "content": pending})
+    st.session_state.messages.append({"role": "user", "content": pending, "sent": datetime.now().strftime("%H:%M")})
     c, s, t = ask()
-    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t})
+    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M")})
     st.session_state["editing"] = None
     st.rerun()
 
@@ -163,22 +173,13 @@ for i, m in enumerate(st.session_state.messages):
             _sp, _mn = st.columns([5, 1])
             with _mn:
                 with st.popover(MENU_GLYPH, key=f"mu{i}"):
-                    if st.button("Copy", key=f"uc{i}"):
-                        st.session_state["act"] = ("copy", i); st.rerun()
-                    if st.button("Select text", key=f"us{i}"):
-                        st.session_state["act"] = ("select", i); st.rerun()
+                    st.html(info_html(m))
                     if st.button("Edit", key=f"ue{i}"):
                         st.session_state["act"] = ("edit", i); st.rerun()
-            if show == ("copy", i):
-                st.code(m["content"])
+            if show == ("info", i):
+                st.html(info_html(m))
                 st.markdown('<div class="close-row">', unsafe_allow_html=True)
                 if st.button(CLOSE_GLYPH + " close", key=f"cl{i}"):
-                    st.session_state["act"] = ("close", i); st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
-            if show == ("select", i):
-                st.text_area("Select & copy", value=m["content"], key=f"slu{i}", height=120)
-                st.markdown('<div class="close-row">', unsafe_allow_html=True)
-                if st.button(CLOSE_GLYPH + " close", key=f"cls{i}"):
                     st.session_state["act"] = ("close", i); st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
     else:
@@ -187,28 +188,19 @@ for i, m in enumerate(st.session_state.messages):
         _mn, _sp = st.columns([1, 3])
         with _mn:
             with st.popover(MENU_GLYPH, key=f"ma{i}"):
-                if st.button("Copy", key=f"ac{i}"):
-                    st.session_state["act"] = ("copy", i); st.rerun()
+                st.html(info_html(m))
                 if st.button("Retry", key=f"ar{i}"):
                     st.session_state["act"] = ("retry", i); st.rerun()
-                if st.button("Select text", key=f"as{i}"):
-                    st.session_state["act"] = ("select", i); st.rerun()
-        if show == ("copy", i):
-            st.code(m["content"])
+        if show == ("info", i):
+            st.html(info_html(m))
             st.markdown('<div class="close-row">', unsafe_allow_html=True)
             if st.button(CLOSE_GLYPH + " close", key=f"cla{i}"):
-                st.session_state["act"] = ("close", i); st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-        if show == ("select", i):
-            st.text_area("Select & copy", value=m["content"], key=f"sla{i}", height=120)
-            st.markdown('<div class="close-row">', unsafe_allow_html=True)
-            if st.button(CLOSE_GLYPH + " close", key=f"clsa{i}"):
                 st.session_state["act"] = ("close", i); st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
 prompt = get_prompt()
 if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.messages.append({"role": "user", "content": prompt, "sent": datetime.now().strftime("%H:%M")})
     c, s, t = ask()
-    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t})
+    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M")})
     st.rerun()
