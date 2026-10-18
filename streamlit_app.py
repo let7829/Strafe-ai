@@ -5,18 +5,6 @@ import random, time, html as H
 
 st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 
-st.markdown("""
-    <style>
-    .css-1jc7ptx, .e1ewe7hr3, 
-    .viewerBadge_container__1QSob, 
-    .styles_viewerBadge__1yB5_, 
-    .viewerBadge_link__1S137, 
-    .viewerBadge_text__1JaDK {
-        display: none !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
 SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
@@ -24,10 +12,10 @@ CLOSE_GLYPH = "\u2715"
 INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;}
-#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:10px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
-#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}
+#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:32px;padding:18px 16px;gap:12px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
+#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1.05rem;font-family:'Space Grotesk',sans-serif;padding:12px 4px;}
 #ci::placeholder{color:#6b7280;}
-#sb{width:38px;height:38px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+#sb{width:46px;height:46px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.4rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 #sb:hover{background:#2563eb;}
 """
 INPUT_JS = "export default function(component){const{parentElement,setTriggerValue}=component;const input=parentElement.querySelector('#ci');const btn=parentElement.querySelector('#sb');if(!input||!btn)return;function send(){const val=input.value.trim();if(!val)return;setTriggerValue('submitted',val);input.value='';}btn.onclick=send;input.onkeydown=function(e){if(e.key==='Enter')send();};}"
@@ -46,7 +34,7 @@ CSS = """
 html,body,[class*='css'],.stApp,#root,.main,.block-container{font-family:'Space Grotesk',sans-serif;background-color:#0a0a0a !important;color:#ececec !important;}
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 #MainMenu,footer,header{visibility:hidden;}
-section.main .block-container{padding:0 1rem 130px 1rem !important;max-width:760px;overflow-x:hidden;}
+section.main .block-container{padding:0 1rem 150px 1rem !important;max-width:760px;overflow-x:hidden;}
 div[data-testid='stVerticalBlock']{gap:0 !important;}
 div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:8px 0 0 0 !important;margin:0 !important;overflow:visible !important;}
 div[data-testid^='stChatMessageAvatar']{display:none !important;}
