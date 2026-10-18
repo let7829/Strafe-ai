@@ -20,7 +20,7 @@ INPUT_CSS = """
 #cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:10px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
 #ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}
 #ci::placeholder{color:#6b7280;}
-#sb{width:38px;height:38px;border-radius:50%;border:none;background:#3b82f6;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+#sb{width:38px;height:38px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 #sb:hover{background:#2563eb;}
 """
 
@@ -52,7 +52,7 @@ div[data-testid='stChatMessage'] button:hover{color:#fff !important;}
 div[data-testid='stChatMessage'] button p{margin:0 !important;}
 .brand{text-align:center;padding:6px 0 10px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .user-bubble{display:flex;justify-content:flex-end;width:100%;margin:12px 0;}
-.user-bubble-inner{background:#3a3a3a;color:#fff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
+.user-bubble-inner{background:#5c5c5c;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
 </style>
 """
 
