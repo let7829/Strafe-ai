@@ -15,7 +15,7 @@ INPUT_CSS = """
 #cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:10px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
 #ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}
 #ci::placeholder{color:#6b7280;}
-#sb{width:38px;height:38px;border-radius:50%;border:none;background:#3b82f6;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+#sb{width:38px;height:38px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 #sb:hover{background:#2563eb;}
 """
 INPUT_JS = "export default function(component){const{parentElement,setTriggerValue}=component;const input=parentElement.querySelector('#ci');const btn=parentElement.querySelector('#sb');if(!input||!btn)return;function send(){const val=input.value.trim();if(!val)return;setTriggerValue('submitted',val);input.value='';}btn.onclick=send;input.onkeydown=function(e){if(e.key==='Enter')send();};}"
@@ -34,18 +34,15 @@ CSS = """
 html,body,[class*='css'],.stApp,#root,.main,.block-container{font-family:'Space Grotesk',sans-serif;background-color:#0a0a0a !important;color:#ececec !important;}
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 #MainMenu,footer,header{visibility:hidden;}
-section.main .block-container{padding:0 1rem 130px 1rem !important;max-width:760px;overflow-x:hidden;}
+section.main .block-container{padding:2px 1rem 130px 1rem !important;max-width:760px;overflow-x:hidden;}
 div[data-testid='stVerticalBlock']{gap:0 !important;}
-div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:8px 0 0 0 !important;margin:0 !important;overflow:visible !important;}
+div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:12px 0 0 0 !important;margin:0 !important;overflow:visible !important;}
 div[data-testid^='stChatMessageAvatar']{display:none !important;}
 div[data-testid='stChatMessage'] div[data-testid='stChatMessageContent']{background:transparent !important;max-width:100%;padding:0;overflow:visible !important;}
 div[data-testid='stChatMessage'] .stMarkdown p{color:#ececec !important;font-size:1.08rem;line-height:1.6;margin:0 0 2px 0;overflow-wrap:anywhere;}
-div[data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;}
-div[data-testid='stHorizontalBlock'] > div:nth-child(1) > div[data-testid='stVerticalBlock']{align-items:flex-start !important;}
-div[data-testid='stHorizontalBlock'] > div:nth-child(2) > div[data-testid='stVerticalBlock']{align-items:flex-end !important;}
-.brand{text-align:center;padding:8px 0 2px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
-.user-bubble{display:flex;justify-content:flex-end;width:100%;margin:10px 0 0 0;}
-.user-bubble-inner{background:#3a3a3a;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
+.brand{text-align:center;padding:2px 0 4px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.user-bubble{display:flex;justify-content:flex-end;width:100%;margin:12px 0 0 0;}
+.user-bubble-inner{background:#5c5c5c;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
 div[data-testid='stPopover']{margin:0 !important;}
 div[data-testid='stPopover'] button{height:20px !important;min-height:0 !important;padding:0 4px !important;font-size:1rem !important;line-height:1 !important;color:#7a7a7a !important;background:transparent !important;border:none !important;box-shadow:none !important;}
 div[data-testid='stPopover'] button:hover{color:#fff !important;}
@@ -157,7 +154,7 @@ for i, m in enumerate(st.session_state.messages):
         else:
             safe = H.escape(m["content"]).replace("\n", "<br>")
             st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>')
-            _sp, _mn = st.columns([3, 1])
+            _sp, _mn = st.columns([16, 1])
             with _mn:
                 with st.popover(MENU_GLYPH, key=f"mu{i}"):
                     if st.button("Copy", key=f"uc{i}"):
@@ -181,7 +178,7 @@ for i, m in enumerate(st.session_state.messages):
     else:
         with st.chat_message("assistant"):
             st.markdown(m["content"])
-        _mn, _sp = st.columns([1, 3])
+        _mn, _sp = st.columns([1, 16])
         with _mn:
             with st.popover(MENU_GLYPH, key=f"ma{i}"):
                 if st.button("Copy", key=f"ac{i}"):
