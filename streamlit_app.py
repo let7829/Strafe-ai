@@ -103,9 +103,9 @@ st.html(CSS)
 st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
-PREFERRED = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768"]
+PREFERRED = ["meta-llama/llama-4-scout-17b-16e-instruct", "qwen/qwen3-32b", "mixtral-8x7b-32768"]
 SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy—you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier—I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
-SAFE_MODELS = {"llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768", "gemma2-9b-it"}
+SAFE_MODELS = {"meta-llama/llama-4-scout-17b-16e-instruct", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768", "gemma2-9b-it"}
 
 def pick_model():
     if "model" in st.session_state:
