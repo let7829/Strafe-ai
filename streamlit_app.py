@@ -110,7 +110,7 @@ st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
 PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy—you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier—I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
+SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy—you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier—I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple.\n\nWhen web_search is available, USE IT. Prefer searching over guessing."
 SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 
 def pick_model():
@@ -186,22 +186,16 @@ def web_search(query, num_results=3):
     except Exception as e:
         return [{"title": "Search error", "link": "", "snippet": str(e)}]
 
-def fetch_url(url, max_chars=1500):
-    try:
-        response = requests.get(url, timeout=3, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-        soup = BeautifulSoup(response.text, 'html.parser')
-        for script in soup(["script", "style"]):
-            script.decompose()
-        text = soup.get_text(separator=' ', strip=True)
-        text = ' '.join(text.split())
-        return text[:max_chars]
-    except Exception as e:
-        return f"Could not fetch URL: {e}"
-
 def build_payload(history, model_override=None):
     model = model_override or pick_model()
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
+    if "qwen" in model.lower():
+        kw["reasoning_effort"] = "medium"
+        kw["reasoning_format"] = "parsed"
+    elif "gpt-oss" in model.lower():
+        kw["reasoning_effort"] = "medium"
+        kw["reasoning_format"] = "parsed"
     return kw
 
 def ask(use_search=False, use_think=False, search_query=None):
@@ -215,7 +209,7 @@ def ask(use_search=False, use_think=False, search_query=None):
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web for current information. Use when the question requires up-to-date data, recent events, specific facts, or anything you are uncertain about.",
+                "description": "Search the web for current information. USE THIS TOOL FREELY for any factual question, recent events, pricing, documentation, code references, product info, news, or anything where accuracy matters. Prefer searching over relying on training data. When in doubt, search.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -230,11 +224,6 @@ def ask(use_search=False, use_think=False, search_query=None):
     for _ in range(max_rounds):
         key = get_working_key()
         kwargs = build_payload(history)
-        if use_think:
-            model = kwargs["model"]
-            if "qwen" in model.lower() or "gpt-oss" in model.lower():
-                kwargs["reasoning_effort"] = "medium"
-                kwargs["reasoning_format"] = "parsed"
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
@@ -280,7 +269,7 @@ def ask(use_search=False, use_think=False, search_query=None):
                 "sent": datetime.now().strftime("%H:%M"),
                 "search": use_search,
                 "think": use_think,
-                "reasoning": reasoning
+                "reasoning": reasoning if use_think else None
             }
 
     raise RuntimeError(last_err or "All API keys failed")
