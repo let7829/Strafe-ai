@@ -1,4 +1,3 @@
-
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
@@ -44,6 +43,7 @@ div[data-testid='stChatMessage'] .stMarkdown p{color:#ececec !important;font-siz
 div[data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;}
 div[data-testid='stHorizontalBlock'] > div:nth-child(1) > div[data-testid='stVerticalBlock']{align-items:flex-start !important;}
 div[data-testid='stHorizontalBlock'] > div:nth-child(2) > div[data-testid='stVerticalBlock']{align-items:flex-end !important;}
+div[data-testid='stHorizontalBlock'] > div:nth-child(2) div[data-testid='stPopoverContent']{left:auto !important;right:0 !important;}
 .brand{text-align:center;padding:8px 0 2px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .user-bubble{display:flex;justify-content:flex-end;width:100%;margin:10px 0 0 0;}
 .user-bubble-inner{background:#5c5c5c;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
@@ -51,7 +51,6 @@ div[data-testid='stPopover']{margin:0 !important;}
 div[data-testid='stPopover'] button{height:20px !important;min-height:0 !important;padding:0 4px !important;font-size:1rem !important;line-height:1 !important;color:#7a7a7a !important;background:transparent !important;border:none !important;box-shadow:none !important;}
 div[data-testid='stPopover'] button:hover{color:#fff !important;}
 div[data-testid='stPopover'] button p{margin:0 !important;}
-div[data-testid='stPopover'] > div{right:0 !important;left:auto !important;min-width:140px !important;}
 .close-row button{background:transparent !important;border:none !important;color:#7a7a7a !important;font-size:0.85rem !important;padding:2px 8px !important;box-shadow:none !important;}
 .close-row button:hover{color:#fff !important;}
 </style>
@@ -158,10 +157,9 @@ for i, m in enumerate(st.session_state.messages):
                     st.rerun()
         else:
             safe = H.escape(m["content"]).replace("\n", "<br>")
-            c1, c2 = st.columns([5, 1])
-            with c1:
-                st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>')
-            with c2:
+            st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>')
+            _sp, _mn = st.columns([3, 1])
+            with _mn:
                 with st.popover(MENU_GLYPH, key=f"mu{i}"):
                     if st.button("Copy", key=f"uc{i}"):
                         st.session_state["act"] = ("copy", i); st.rerun()
