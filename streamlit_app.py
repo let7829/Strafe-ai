@@ -1,3 +1,4 @@
+
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
@@ -50,6 +51,7 @@ div[data-testid='stPopover']{margin:0 !important;}
 div[data-testid='stPopover'] button{height:20px !important;min-height:0 !important;padding:0 4px !important;font-size:1rem !important;line-height:1 !important;color:#7a7a7a !important;background:transparent !important;border:none !important;box-shadow:none !important;}
 div[data-testid='stPopover'] button:hover{color:#fff !important;}
 div[data-testid='stPopover'] button p{margin:0 !important;}
+div[data-testid='stPopover'] > div{right:0 !important;left:auto !important;min-width:140px !important;}
 .close-row button{background:transparent !important;border:none !important;color:#7a7a7a !important;font-size:0.85rem !important;padding:2px 8px !important;box-shadow:none !important;}
 .close-row button:hover{color:#fff !important;}
 </style>
@@ -156,9 +158,10 @@ for i, m in enumerate(st.session_state.messages):
                     st.rerun()
         else:
             safe = H.escape(m["content"]).replace("\n", "<br>")
-            st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>')
-            _sp, _mn = st.columns([3, 1])
-            with _mn:
+            c1, c2 = st.columns([5, 1])
+            with c1:
+                st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>')
+            with c2:
                 with st.popover(MENU_GLYPH, key=f"mu{i}"):
                     if st.button("Copy", key=f"uc{i}"):
                         st.session_state["act"] = ("copy", i); st.rerun()
