@@ -53,12 +53,6 @@ div[data-testid='stPopover'] button p{margin:0 !important;}
 """
 
 st.html(CSS)
-st.markdown("""
-<style>
-footer {visibility: hidden;}
-div[data-testid="stAppViewContainer"] > div:last-child {display: none !important;}
-</style>
-""", unsafe_allow_html=True)
 st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
