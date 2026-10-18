@@ -104,7 +104,7 @@ st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
 PREFERRED = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768"]
-SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier\u2014I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
+SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy—you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier—I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
 SAFE_MODELS = {"llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768", "gemma2-9b-it"}
 
 def pick_model():
@@ -132,6 +132,20 @@ def pick_model():
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+def get_working_key():
+    if "failed_keys" not in st.session_state:
+        st.session_state.failed_keys = set()
+    available = [k for k in KEYS if k not in st.session_state.failed_keys]
+    if not available:
+        st.session_state.failed_keys.clear()
+        available = KEYS
+    return random.choice(available)
+
+def mark_key_failed(key):
+    if "failed_keys" not in st.session_state:
+        st.session_state.failed_keys = set()
+    st.session_state.failed_keys.add(key)
 
 def web_search(query, num_results=3):
     try:
@@ -210,25 +224,30 @@ def ask(use_search=False, use_think=False, search_query=None):
         thinking_messages = history.copy()
         thinking_messages.append({"role": "user", "content": "Think through this step by step. Show your reasoning, notes, and plan clearly. Write your internal thoughts below:"})
         try:
-            think_r = Groq(api_key=random.choice(KEYS)).chat.completions.create(model=pick_model(), messages=thinking_messages, max_completion_tokens=600, temperature=0.7)
+            key = get_working_key()
+            think_r = Groq(api_key=key).chat.completions.create(model=pick_model(), messages=thinking_messages, max_completion_tokens=600, temperature=0.7)
             thinking_text = (getattr(think_r.choices[0].message, "content", None) or "").strip()
             total_tokens += think_r.usage.total_tokens if think_r.usage else 0
             history.append({"role": "system", "content": f"Internal reasoning: {thinking_text}\n\nNow provide the final polished response based on this reasoning."})
-        except Exception:
+        except Exception as e:
+            mark_key_failed(key)
             history.append({"role": "system", "content": "Thinking process failed. Provide a direct answer."})
         finally:
             think_container.empty()
-    for _ in range(3):
+    for _ in range(len(KEYS)):
+        key = get_working_key()
         kwargs = build_payload(history)
         try:
-            r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
+            r = Groq(api_key=key).chat.completions.create(**kwargs)
         except NotFoundError:
             st.session_state.pop("model", None)
+            mark_key_failed(key)
             last_err = "model gone"
             continue
         except Exception as e:
+            mark_key_failed(key)
             last_err = str(e)[:120]
-            break
+            continue
         content = (getattr(r.choices[0].message, "content", None) or "").strip()
         secs = max(0.1, time.time() - t0)
         used = (r.usage.total_tokens if r.usage else 0) + total_tokens
@@ -237,7 +256,7 @@ def ask(use_search=False, use_think=False, search_query=None):
             with st.expander("⚛︎ thinking process", expanded=False):
                 st.markdown(thinking_text)
         return content, round(secs, 1), f"{tps} tok/s"
-    raise RuntimeError(last_err or "Groq call failed")
+    raise RuntimeError(last_err or "All API keys failed")
 
 def info_html(m):
     sent = m.get("sent", "?")
