@@ -34,16 +34,17 @@ html,body,[class*='css'],.stApp,#root,.main,.block-container{font-family:'Space 
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 #MainMenu,footer,header{visibility:hidden;}
 section.main .block-container{padding:12px 1rem 130px 1rem !important;max-width:760px;overflow-x:hidden;}
-div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:6px 0 0 0;overflow:visible !important;}
+div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:6px 0;overflow:visible !important;}
 div[data-testid^='stChatMessageAvatar']{display:none !important;}
 div[data-testid='stChatMessage'] div[data-testid='stChatMessageContent']{background:transparent !important;max-width:100%;padding:0;overflow:visible !important;}
 div[data-testid='stChatMessage'] .stMarkdown p{color:#ececec !important;font-size:1.08rem;line-height:1.6;margin:0 0 6px 0;overflow-wrap:anywhere;}
 div[data-testid='stPopover'] button{background:transparent !important;border:none !important;color:#8a8a8a !important;font-size:1.3rem !important;padding:2px 8px !important;box-shadow:none !important;}
 div[data-testid='stPopover'] button:hover{color:#fff !important;}
 .brand{text-align:center;padding:6px 0 10px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
-.user-bubble{display:flex;justify-content:flex-end;width:100%;margin:12px 0 0 0;}
+.user-bubble{display:flex;justify-content:flex-end;width:100%;margin:12px 0 2px 0;}
 .user-bubble-inner{background:#5c5c5c;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
-.menu-row{display:flex;width:100%;margin:-6px 0 8px 0;}
+.menu-row{display:flex;width:100%;margin:0 0 6px 0;}
+.menu-row.right{justify-content:flex-end;}
 .menu-row.left{justify-content:flex-start;}
 </style>
 """
@@ -147,7 +148,7 @@ for i, m in enumerate(st.session_state.messages):
         else:
             safe = H.escape(m["content"]).replace("\n", "<br>")
             st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>')
-            st.markdown('<div class="menu-row left">', unsafe_allow_html=True)
+            st.markdown('<div class="menu-row right">', unsafe_allow_html=True)
             with st.popover(MENU_GLYPH, key=f"mu{i}"):
                 if st.button("Copy", key=f"uc{i}"):
                     st.session_state["act"] = ("copy", i); st.rerun()
