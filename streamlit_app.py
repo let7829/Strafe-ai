@@ -202,6 +202,7 @@ def ask(use_search=False, use_think=False, search_query=None):
     t0 = time.time()
     last_err = None
     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    tool_calls_made = 0
 
     tools = None
     if use_search:
@@ -241,6 +242,9 @@ def ask(use_search=False, use_think=False, search_query=None):
 
         msg = r.choices[0].message
         if tools and getattr(msg, "tool_calls", None):
+            tool_calls_made += len(msg.tool_calls)
+            if tool_calls_made > 5:
+                raise RuntimeError("Tool call limit reached: model requested too many searches")
             assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
             for tc in msg.tool_calls:
                 assistant_msg["tool_calls"].append({
