@@ -1,4 +1,3 @@
-
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
@@ -7,7 +6,7 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercontent.com/let7829/Strafe-ai/refs/heads/main/logo.png", layout="centered")
 
 SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
@@ -108,8 +107,10 @@ st.html(CSS)
 st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
-PREFERRED = ["llama-3.3-70b-versatile", "qwen/qwen3.8-27b"]
+PREFERRED = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768"]
 SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier\u2014I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
+
+SAFE_MODELS = {"llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768", "gemma2-9b-it"}
 
 def pick_model():
     if "model" in st.session_state:
@@ -118,9 +119,25 @@ def pick_model():
         avail = {m.id for m in Groq(api_key=KEYS[0]).models.list()}
     except Exception:
         avail = set()
-    chosen = next((p for p in PREFERRED if p in avail), None) or (list(avail)[0] if avail else PREFERRED[0])
-    st.session_state.model = chosen
-    return chosen
+    
+    for p in PREFERRED:
+        if p in avail:
+            st.session_state.model = p
+            return p
+    
+    safe_avail = avail & SAFE_MODELS
+    if safe_avail:
+        chosen = list(safe_avail)[0]
+        st.session_state.model = chosen
+        return chosen
+    
+    if avail:
+        chosen = list(avail)[0]
+        st.session_state.model = chosen
+        return chosen
+    
+    st.session_state.model = PREFERRED[0]
+    return PREFERRED[0]
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -132,7 +149,7 @@ def web_search(query, num_results=3):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        resp = requests.get(url, params=params, headers=headers, timeout=8)
         soup = BeautifulSoup(resp.text, "html.parser")
         results = []
         for item in soup.select(".result")[:num_results]:
@@ -161,7 +178,7 @@ def web_search(query, num_results=3):
 
 def fetch_url(url, max_chars=1500):
     try:
-        response = requests.get(url, timeout=5, headers={
+        response = requests.get(url, timeout=3, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -173,11 +190,11 @@ def fetch_url(url, max_chars=1500):
     except Exception as e:
         return f"Could not fetch URL: {e}"
 
-def build_payload(history):
-    model = pick_model()
+def build_payload(history, model_override=None):
+    model = model_override or pick_model()
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
-    if "qwen" in model:
+    if "qwen" in model.lower():
         kw["reasoning_effort"] = "none"
         kw["reasoning_format"] = "hidden"
     return kw
@@ -186,6 +203,7 @@ def ask(use_search=False, use_think=False, search_query=None):
     t0 = time.time()
     last_err = None
     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    thinking_text = None
     
     if use_search and search_query:
         search_container = st.empty()
@@ -225,23 +243,19 @@ def ask(use_search=False, use_think=False, search_query=None):
             thinking_text = (getattr(think_r.choices[0].message, "content", None) or "").strip()
             total_tokens += think_r.usage.total_tokens if think_r.usage else 0
             
-            think_container.empty()
-            
-            with st.expander("⚛︎ thinking process", expanded=False):
-                st.markdown(thinking_text)
-            
             history.append({
                 "role": "system",
                 "content": f"Internal reasoning: {thinking_text}\n\nNow provide the final polished response based on this reasoning."
             })
         except Exception as e:
-            think_container.empty()
             history.append({
                 "role": "system",
                 "content": "Thinking process failed. Provide a direct answer."
             })
+        finally:
+            think_container.empty()
     
-    for _ in range(2):
+    for _ in range(3):
         kwargs = build_payload(history)
         try:
             r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
@@ -256,7 +270,13 @@ def ask(use_search=False, use_think=False, search_query=None):
         secs = max(0.1, time.time() - t0)
         used = (r.usage.total_tokens if r.usage else 0) + total_tokens
         tps = round(used / secs, 1) if used else 0
+        
+        if thinking_text:
+            with st.expander("⚛︎ thinking process", expanded=False):
+                st.markdown(thinking_text)
+        
         return content, round(secs, 1), f"{tps} tok/s"
+    
     raise RuntimeError(last_err or "Groq call failed")
 
 def info_html(m):
