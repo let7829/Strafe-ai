@@ -52,7 +52,7 @@ div[data-testid='stChatMessage'] button:hover{color:#fff !important;}
 div[data-testid='stChatMessage'] button p{margin:0 !important;}
 .brand{text-align:center;padding:6px 0 10px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .user-bubble{display:flex;justify-content:flex-end;width:100%;margin:12px 0;}
-.user-bubble-inner{background:#3a3a3a;color:#fff;border-radius:26px 26px 26px 8px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
+.user-bubble-inner{background:#3a3a3a;color:#fff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
 </style>
 """
 
