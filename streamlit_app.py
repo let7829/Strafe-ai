@@ -9,17 +9,54 @@ st.set_page_config(page_title="Strafe AI", page_icon="⚡", layout="centered")
 SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
+SEARCH_GLYPH = "\u2315"
+THINK_GLYPH = "\u269b"
 
-INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div></div>'
+INPUT_HTML = '<div id="bar"><div id="tools"><button id="btn-search" type="button" class="tool-btn">' + SEARCH_GLYPH + '</button><button id="btn-think" type="button" class="tool-btn">' + THINK_GLYPH + '</button></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div></div>'
 INPUT_CSS = """
-#bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;}
+#bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
+#tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
+.tool-btn{width:32px;height:32px;border-radius:50%;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;}
+.tool-btn:hover{color:#fff;border-color:#4f8dff;}
+.tool-btn.active{background:#4f8dff;color:#fff;border-color:#4f8dff;}
 #cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:10px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
 #ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}
 #ci::placeholder{color:#6b7280;}
 #sb{width:38px;height:38px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 #sb:hover{background:#2563eb;}
 """
-INPUT_JS = "export default function(component){const{parentElement,setTriggerValue}=component;const input=parentElement.querySelector('#ci');const btn=parentElement.querySelector('#sb');if(!input||!btn)return;function send(){const val=input.value.trim();if(!val)return;setTriggerValue('submitted',val);input.value='';}btn.onclick=send;input.onkeydown=function(e){if(e.key==='Enter')send();};}"
+INPUT_JS = """
+export default function(component){
+    const{parentElement,setTriggerValue}=component;
+    const input=parentElement.querySelector('#ci');
+    const btn=parentElement.querySelector('#sb');
+    const btnSearch=parentElement.querySelector('#btn-search');
+    const btnThink=parentElement.querySelector('#btn-think');
+    if(!input||!btn)return;
+    
+    let searchActive=false;
+    let thinkActive=false;
+    
+    function send(){
+        const val=input.value.trim();
+        if(!val)return;
+        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive});
+        input.value='';
+    }
+    
+    btn.onclick=send;
+    input.onkeydown=function(e){if(e.key==='Enter')send();};
+    
+    btnSearch.onclick=function(){
+        searchActive=!searchActive;
+        this.classList.toggle('active',searchActive);
+    };
+    btnThink.onclick=function(){
+        thinkActive=!thinkActive;
+        this.classList.toggle('active',thinkActive);
+    };
+}
+"""
 
 chat_input = components.component("strafe_chat_input", html=INPUT_HTML, css=INPUT_CSS, js=INPUT_JS)
 
@@ -65,7 +102,7 @@ st.html(CSS)
 st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
-PREFERRED = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"]
+PREFERRED = ["llama-3.3-70b-versatile", "qwen/qwen3.8-27b"]
 SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier\u2014I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
 
 def pick_model():
@@ -82,27 +119,24 @@ def pick_model():
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-def build_payload(history):
+def build_payload(history, use_search=False):
     model = pick_model()
-    if "gpt-oss" in model:
-        preamble = [
-            {"role": "user", "content": SYSTEM},
-            {"role": "assistant", "content": "Got it."},
-        ]
-        return dict(model=model, messages=preamble + history, max_completion_tokens=1024, temperature=0.6, top_p=0.95, include_reasoning=False)
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
+    if use_search:
+        kw["tools"] = [{"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}]
+        kw["tool_choice"] = "auto"
     if "qwen" in model:
         kw["reasoning_effort"] = "none"
         kw["reasoning_format"] = "hidden"
     return kw
 
-def ask():
+def ask(use_search=False):
     t0 = time.time()
     last_err = None
     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
     for _ in range(2):
-        kwargs = build_payload(history)
+        kwargs = build_payload(history, use_search)
         try:
             r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
         except NotFoundError:
@@ -112,7 +146,28 @@ def ask():
         except Exception as e:
             last_err = str(e)[:120]
             break
-        content = (getattr(r.choices[0].message, "content", None) or "").strip()
+        
+        content = ""
+        if hasattr(r.choices[0].message, "tool_calls") and r.choices[0].message.tool_calls:
+            tool_call = r.choices[0].message.tool_calls[0]
+            if tool_call.function.name == "web_search":
+                import json
+                args = json.loads(tool_call.function.arguments)
+                query = args.get("query", "")
+                try:
+                    from duckduckgo_search import DDGS
+                    with DDGS() as ddgs:
+                        results = list(ddgs.text(query, max_results=3))
+                    context = "\n".join([f"- {r['title']}: {r['body']}" for r in results])
+                    history.append({"role": "assistant", "content": None, "tool_calls": r.choices[0].message.tool_calls})
+                    history.append({"role": "tool", "tool_call_id": tool_call.id, "content": context})
+                    r2 = Groq(api_key=random.choice(KEYS)).chat.completions.create(**build_payload(history, False))
+                    content = (getattr(r2.choices[0].message, "content", None) or "").strip()
+                except Exception:
+                    content = "(search failed)"
+        else:
+            content = (getattr(r.choices[0].message, "content", None) or "").strip()
+        
         secs = max(0.1, time.time() - t0)
         used = r.usage.total_tokens if r.usage else 0
         tps = round(used / secs, 1) if used else 0
@@ -123,15 +178,19 @@ def info_html(m):
     sent = m.get("sent", "?")
     secs = m.get("secs", "?")
     tps = m.get("tok", "?")
-    return f'<div class="info-line">sent <span>{sent}</span> &nbsp;·&nbsp; {secs}s &nbsp;·&nbsp; {tps}</div>'
+    flags = []
+    if m.get("search"): flags.append(SEARCH_GLYPH)
+    if m.get("think"): flags.append(THINK_GLYPH)
+    flag_str = " ".join(flags) + " " if flags else ""
+    return f'<div class="info-line">{flag_str}sent <span>{sent}</span> &nbsp;\u00b7&nbsp; {secs}s &nbsp;\u00b7&nbsp; {tps}</div>'
 
 act = st.session_state.pop("act", None)
 if act:
     kind, i = act
     if kind == "retry" and i > 0 and st.session_state.messages[i - 1]["role"] == "user":
         st.session_state.messages = st.session_state.messages[:i]
-        c, s, t = ask()
-        st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M")})
+        c, s, t = ask(use_search=st.session_state.messages[-1].get("search", False) if st.session_state.messages else False)
+        st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": st.session_state.messages[-1].get("search", False) if st.session_state.messages else False, "think": st.session_state.messages[-1].get("think", False) if st.session_state.messages else False})
         st.session_state["show"] = None
     elif kind == "info":
         cur = st.session_state.get("show")
@@ -144,9 +203,12 @@ if act:
 
 pending = st.session_state.pop("pending", None)
 if pending is not None:
-    st.session_state.messages.append({"role": "user", "content": pending, "sent": datetime.now().strftime("%H:%M")})
-    c, s, t = ask()
-    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M")})
+    text = pending.get("text", "") if isinstance(pending, dict) else pending
+    use_search = pending.get("search", False) if isinstance(pending, dict) else False
+    use_think = pending.get("think", False) if isinstance(pending, dict) else False
+    st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
+    c, s, t = ask(use_search=use_search)
+    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
     st.session_state["editing"] = None
     st.rerun()
 
@@ -161,7 +223,7 @@ for i, m in enumerate(st.session_state.messages):
             with sc:
                 if st.button("Save", key=f"sv{i}"):
                     st.session_state.messages = st.session_state.messages[:i]
-                    st.session_state["pending"] = new
+                    st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False)}
                     st.rerun()
             with sk:
                 if st.button("Cancel", key=f"cx{i}"):
@@ -200,7 +262,5 @@ for i, m in enumerate(st.session_state.messages):
 
 prompt = get_prompt()
 if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt, "sent": datetime.now().strftime("%H:%M")})
-    c, s, t = ask()
-    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M")})
+    st.session_state["pending"] = prompt
     st.rerun()
