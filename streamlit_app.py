@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
-import random, time, html as H
+import random, time, html as H, json
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
@@ -11,14 +11,14 @@ st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercont
 SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
-SEARCH_GLYPH = "\u2315"
-THINK_GLYPH = "\u269b"
 
-INPUT_HTML = '<div id="bar"><div id="tools"><button id="btn-search" type="button" class="tool-btn">' + SEARCH_GLYPH + '</button><button id="btn-think" type="button" class="tool-btn">' + THINK_GLYPH + '</button></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div></div>'
+INPUT_HTML = '<div id="bar"><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
 #tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
-.tool-btn{width:32px;height:32px;border-radius:50%;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;}
+.tool-btn{height:32px;border-radius:16px;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:0.85rem;cursor:pointer;display:flex;align-items:center;gap:6px;padding:0 12px;transition:all 0.2s;font-family:'Space Grotesk',sans-serif;}
+.tool-btn .icon{font-size:1rem;line-height:1;}
+.tool-btn .label{white-space:nowrap;}
 .tool-btn:hover{color:#fff;border-color:#4f8dff;}
 .tool-btn.active{background:#4f8dff;color:#fff;border-color:#4f8dff;}
 #cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:10px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
@@ -37,6 +37,10 @@ export default function(component){
     if(!input||!btn)return;
     let searchActive=false;
     let thinkActive=false;
+    function updateLabels(){
+        btnSearch.querySelector('.label').textContent=searchActive?'Searching':'Search';
+        btnThink.querySelector('.label').textContent=thinkActive?'Thinking':'Think';
+    }
     function send(){
         const val=input.value.trim();
         if(!val)return;
@@ -48,10 +52,12 @@ export default function(component){
     btnSearch.onclick=function(){
         searchActive=!searchActive;
         this.classList.toggle('active',searchActive);
+        updateLabels();
     };
     btnThink.onclick=function(){
         thinkActive=!thinkActive;
         this.classList.toggle('active',thinkActive);
+        updateLabels();
     };
 }
 """
@@ -196,48 +202,42 @@ def build_payload(history, model_override=None):
     model = model_override or pick_model()
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
-    if "qwen" in model.lower():
-        kw["reasoning_effort"] = "none"
-        kw["reasoning_format"] = "hidden"
     return kw
 
 def ask(use_search=False, use_think=False, search_query=None):
     t0 = time.time()
     last_err = None
     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-    thinking_text = None
-    if use_search and search_query:
-        search_container = st.empty()
-        search_container.html('<div class="info-line">⌕ <span>searching...</span></div>')
-        results = web_search(search_query)
-        context_parts = []
-        for r in results[:2]:
-            if r["link"]:
-                page_text = fetch_url(r["link"])
-                context_parts.append(f"Source: {r['title']}\n{page_text}")
-        search_context = "\n\n".join(context_parts)
-        history.append({"role": "system", "content": f"Web search results for '{search_query}':\n\n{search_context}\n\nUse this information to answer the user's question."})
-        search_container.empty()
-    total_tokens = 0
-    if use_think:
-        think_container = st.empty()
-        think_container.html('<div class="info-line">⚛︎ <span>thinking...</span></div>')
-        thinking_messages = history.copy()
-        thinking_messages.append({"role": "user", "content": "Think through this step by step. Show your reasoning, notes, and plan clearly. Write your internal thoughts below:"})
-        try:
-            key = get_working_key()
-            think_r = Groq(api_key=key).chat.completions.create(model=pick_model(), messages=thinking_messages, max_completion_tokens=600, temperature=0.7)
-            thinking_text = (getattr(think_r.choices[0].message, "content", None) or "").strip()
-            total_tokens += think_r.usage.total_tokens if think_r.usage else 0
-            history.append({"role": "system", "content": f"Internal reasoning: {thinking_text}\n\nNow provide the final polished response based on this reasoning."})
-        except Exception as e:
-            mark_key_failed(key)
-            history.append({"role": "system", "content": "Thinking process failed. Provide a direct answer."})
-        finally:
-            think_container.empty()
-    for _ in range(len(KEYS)):
+
+    tools = None
+    if use_search:
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for current information. Use when the question requires up-to-date data, recent events, specific facts, or anything you are uncertain about.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search query to look up"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        }]
+
+    max_rounds = 5 if use_search else 1
+    for _ in range(max_rounds):
         key = get_working_key()
         kwargs = build_payload(history)
+        if use_think:
+            model = kwargs["model"]
+            if "qwen" in model.lower() or "gpt-oss" in model.lower():
+                kwargs["reasoning_effort"] = "medium"
+                kwargs["reasoning_format"] = "parsed"
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
         try:
             r = Groq(api_key=key).chat.completions.create(**kwargs)
         except NotFoundError:
@@ -249,14 +249,40 @@ def ask(use_search=False, use_think=False, search_query=None):
             mark_key_failed(key)
             last_err = str(e)[:120]
             continue
-        content = (getattr(r.choices[0].message, "content", None) or "").strip()
-        secs = max(0.1, time.time() - t0)
-        used = (r.usage.total_tokens if r.usage else 0) + total_tokens
-        tps = round(used / secs, 1) if used else 0
-        if thinking_text:
-            with st.expander("⚛︎ thinking process", expanded=False):
-                st.markdown(thinking_text)
-        return content, round(secs, 1), f"{tps} tok/s"
+
+        msg = r.choices[0].message
+        if tools and getattr(msg, "tool_calls", None):
+            assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
+            for tc in msg.tool_calls:
+                assistant_msg["tool_calls"].append({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                })
+            history.append(assistant_msg)
+            for tc in msg.tool_calls:
+                if tc.function.name == "web_search":
+                    args = json.loads(tc.function.arguments)
+                    results = web_search(args.get("query", ""))
+                    context = "\n".join(f"{r['title']}: {r['snippet']} ({r['link']})" for r in results)
+                    history.append({"role": "tool", "tool_call_id": tc.id, "content": context})
+            continue
+        else:
+            content = (msg.content or "").strip()
+            reasoning = getattr(msg, "reasoning_content", None)
+            secs = max(0.1, time.time() - t0)
+            used = (r.usage.total_tokens if r.usage else 0)
+            tps = round(used / secs, 1) if used else 0
+            return {
+                "content": content,
+                "secs": round(secs, 1),
+                "tok": f"{tps} tok/s",
+                "sent": datetime.now().strftime("%H:%M"),
+                "search": use_search,
+                "think": use_think,
+                "reasoning": reasoning
+            }
+
     raise RuntimeError(last_err or "All API keys failed")
 
 def info_html(m):
@@ -265,9 +291,9 @@ def info_html(m):
     tps = m.get("tok", "?")
     flags = []
     if m.get("search"):
-        flags.append(SEARCH_GLYPH)
+        flags.append("\u2315")
     if m.get("think"):
-        flags.append(THINK_GLYPH)
+        flags.append("\u269b")
     flag_str = " ".join(flags) + " " if flags else ""
     return f'<div class="info-line">{flag_str}sent <span>{sent}</span> &nbsp;\u00b7&nbsp; {secs}s &nbsp;\u00b7&nbsp; {tps}</div>'
 
@@ -277,8 +303,8 @@ if act:
     if kind == "retry" and i > 0 and st.session_state.messages[i - 1]["role"] == "user":
         prev_msg = st.session_state.messages[i - 1]
         st.session_state.messages = st.session_state.messages[:i]
-        c, s, t = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False), search_query=prev_msg["content"] if prev_msg.get("search") else None)
-        st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": prev_msg.get("search", False), "think": prev_msg.get("think", False)})
+        result = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False), search_query=prev_msg["content"] if prev_msg.get("search") else None)
+        st.session_state.messages.append({"role": "assistant", **result})
         st.session_state["show"] = None
     elif kind == "info":
         cur = st.session_state.get("show")
@@ -295,8 +321,8 @@ if pending is not None:
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
-    c, s, t = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None)
-    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
+    result = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None)
+    st.session_state.messages.append({"role": "assistant", **result})
     st.session_state["editing"] = None
     st.rerun()
 
@@ -335,6 +361,11 @@ for i, m in enumerate(st.session_state.messages):
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
     else:
+        reasoning = m.get("reasoning")
+        if reasoning:
+            think_secs = m.get("secs", "?")
+            with st.expander(f"\u269b Thought for {think_secs}s", expanded=False):
+                st.markdown(reasoning)
         with st.chat_message("assistant"):
             st.markdown(m["content"])
         _mn, _sp = st.columns([1, 3])
