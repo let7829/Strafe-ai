@@ -12,10 +12,10 @@ CLOSE_GLYPH = "\u2715"
 INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;}
-#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:32px;padding:18px 16px;gap:12px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
-#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1.05rem;font-family:'Space Grotesk',sans-serif;padding:12px 4px;}
+#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:32px;padding:18px 16px;gap:10px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
+#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:10px 4px;}
 #ci::placeholder{color:#6b7280;}
-#sb{width:46px;height:46px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.4rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+#sb{width:44px;height:44px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 #sb:hover{background:#2563eb;}
 """
 INPUT_JS = "export default function(component){const{parentElement,setTriggerValue}=component;const input=parentElement.querySelector('#ci');const btn=parentElement.querySelector('#sb');if(!input||!btn)return;function send(){const val=input.value.trim();if(!val)return;setTriggerValue('submitted',val);input.value='';}btn.onclick=send;input.onkeydown=function(e){if(e.key==='Enter')send();};}"
