@@ -1,3 +1,4 @@
+
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
@@ -55,7 +56,7 @@ export default function(component){
     input.onkeydown=function(e){if(e.key==='Enter')send();};
     if(plusBtn){
         plusBtn.onclick=function(){
-            setTriggerValue('plus_clicked',true);
+            setTriggerValue('plus_clicked',Date.now());
         };
     }
     btnSearch.onclick=function(){
@@ -75,10 +76,13 @@ chat_input = components.component("strafe_chat_input", html=INPUT_HTML, css=INPU
 
 def get_prompt():
     result = chat_input(key="strafe_inp", on_submitted_change=lambda: None)
-    if result and result.submitted:
-        return result.submitted
-    if result and result.plus_clicked:
+    if not result:
+        return None
+    if getattr(result, "plus_clicked", None):
         st.session_state["plus_triggered"] = True
+    submitted = getattr(result, "submitted", None)
+    if submitted:
+        return submitted
     return None
 
 CSS = """
@@ -190,7 +194,7 @@ def web_search(query, num_results=3):
             return [{"title": "No results", "link": "", "snippet": "Search returned empty. Tell the user."}]
         return results
     except DDGSException as e:
-        return [{"title": "Rate Limited", "link": "", "snippet": f"Rate limit reached. Tell the user."}]
+        return [{"title": "Rate Limited", "link": "", "snippet": "Rate limit reached. Tell the user."}]
     except Exception as e:
         return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. Tell the user."}]
 
@@ -406,4 +410,4 @@ if prompt:
     st.rerun()
 
 if st.session_state.pop("plus_triggered", False):
-    st.toast("Plus button clicked — hook up file upload or attachments here")
+    st.toast("+ clicked")
