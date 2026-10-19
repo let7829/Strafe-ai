@@ -3,7 +3,8 @@ import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
 import random, time, html as H, json
 from datetime import datetime
-from duckduckgo_search import DDGS
+from ddgs import DDGS
+from ddgs.exceptions import DDGSException
 
 st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercontent.com/let7829/Strafe-ai/refs/heads/main/logo.png", layout="centered")
 
@@ -11,7 +12,7 @@ SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 
-INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div></div>'
+INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something (type look_back to read full history)" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
 #tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
@@ -107,14 +108,19 @@ div[data-testid='stExpander'] .stMarkdown{color:#bdbdbd !important;font-size:0.9
 st.html(CSS)
 st.html("<div class='brand'>STRAFE AI</div>")
 
-KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
+KEYS = [st.secrets.get(f"GROQ_API_KEY_{i}") for i in range(1, 7)]
+KEYS = [k for k in KEYS if k]
+if not KEYS:
+    st.error("No GROQ_API_KEY_1..6 found in secrets. Add at least one.")
+    st.stop()
+
 PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
 SYSTEM = (
     "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\n"
     "I match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\n"
     "I hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\n"
     "You are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple.\n\n"
-    "CRITICAL INSTRUCTION: Your internal training data ends at early 2025. If the user asks a question answer it with web search (like current events, new technology, or recent financial news), YOU MUST USE THE web_search TOOL."
+    "CRITICAL: Your internal training data ends in early 2025. If the user asks about recent events, YOU MUST USE the web_search TOOL. Do not guess."
 )
 SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 
@@ -162,71 +168,42 @@ def mark_key_failed(key):
 def web_search(query, num_results=3):
     try:
         results = []
-        headers = {"Accept-Encoding": "gzip, deflate, br"}
-        with DDGS(headers=headers) as ddgs:
-            for r in ddgs.text(query, max_results=num_results):
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=num_results, backend="brave,google,duckduckgo"):
                 results.append({
                     "title": r.get("title", ""),
                     "link": r.get("href", ""),
                     "snippet": r.get("body", "")
                 })
         if not results:
-            return [{"title": "No results", "link": "", "snippet": "Search returned empty. Rely on training data."}]
+            return [{"title": "No results", "link": "", "snippet": "Search returned empty. Tell the user."}]
         return results
+    except DDGSException as e:
+        return [{"title": "Rate Limited", "link": "", "snippet": f"Rate limit reached. Tell the user."}]
     except Exception as e:
         return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. Tell the user."}]
 
-def build_payload(history, model_override=None):
-    model = model_override or pick_model()
+def build_payload(history):
+    model = pick_model()
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
     if "qwen" in model.lower():
-        kw["reasoning_effort"] = "medium"
         kw["reasoning_format"] = "parsed"
     elif "gpt-oss" in model.lower():
         kw["reasoning_effort"] = "medium"
         kw["reasoning_format"] = "parsed"
     return kw
 
-def ask(use_search=False, use_think=False, search_query=None, look_back=False):
-    t0 = time.time()
+def call_groq_with_retry(kwargs):
+    tried = set()
     last_err = None
-    if look_back:
-        history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-    else:
-        history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages[-15:]]
-
-    tools = None
-    if use_search:
-        tools = [{
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Search the web for current info, news, or facts. If the user asks about recent events (like 2026 news), YOU MUST USE THIS TOOL. DO NOT fake the search. If the search returns 'No results' or 'Error', tell the user.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query. ALWAYS fix spelling mistakes and use clean keywords. (e.g., 'first trillionaire Elon Musk 2026', NOT 'for who first trillionare')."
-                        }
-                    },
-                    "required": ["query"]
-                }
-            }
-        }]
-
-    max_rounds = 5 if use_search else 1
-    tool_calls_made = 0
-
-    for _ in range(max_rounds):
+    while len(tried) < len(KEYS):
         key = get_working_key()
-        kwargs = build_payload(history)
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+        if key in tried:
+            continue
+        tried.add(key)
         try:
-            r = Groq(api_key=key).chat.completions.create(**kwargs)
+            return Groq(api_key=key).chat.completions.create(**kwargs), None
         except NotFoundError:
             st.session_state.pop("model", None)
             mark_key_failed(key)
@@ -238,12 +215,55 @@ def ask(use_search=False, use_think=False, search_query=None, look_back=False):
                 mark_key_failed(key)
             last_err = err_str[:120]
             continue
+    return None, last_err
+
+def ask(use_search=False, use_think=False, look_back=False):
+    t0 = time.time()
+    if look_back:
+        history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    else:
+        history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages[-15:]]
+
+    tools = None
+    if use_search:
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for current info. DO NOT fake the search. If search returns 'No results', tell the user.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Clean keywords ONLY. Fix spelling. (e.g., 'Elon Musk first trillionaire 2026', NOT 'who is the first trillionare')."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }]
+
+    max_rounds = 5 if use_search else 1
+    tool_calls_made = 0
+    last_err = None
+
+    for round_idx in range(max_rounds):
+        kwargs = build_payload(history)
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "required" if round_idx == 0 and tool_calls_made == 0 else "auto"
+
+        r, err = call_groq_with_retry(kwargs)
+        if r is None:
+            last_err = err
+            break
 
         msg = r.choices[0].message
         if tools and getattr(msg, "tool_calls", None):
             tool_calls_made += len(msg.tool_calls)
             if tool_calls_made > 5:
-                raise RuntimeError("Tool call limit reached")
+                raise RuntimeError("Max tool rounds exceeded")
             assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
             for tc in msg.tool_calls:
                 assistant_msg["tool_calls"].append({
@@ -256,7 +276,7 @@ def ask(use_search=False, use_think=False, search_query=None, look_back=False):
                 if tc.function.name == "web_search":
                     args = json.loads(tc.function.arguments)
                     results = web_search(args.get("query", ""))
-                    context = "\n".join(f"{r['title']}: {r['snippet']} ({r['link']})" for r in results)
+                    context = "\n".join(f"{res['title']}: {res['snippet']} ({res['link']})" for res in results)
                     history.append({"role": "tool", "tool_call_id": tc.id, "content": context})
             continue
         else:
@@ -295,12 +315,12 @@ if act:
     if kind == "retry" and i > 0 and st.session_state.messages[i - 1]["role"] == "user":
         prev_msg = st.session_state.messages[i - 1]
         st.session_state.messages = st.session_state.messages[:i]
-        result = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False), search_query=prev_msg["content"] if prev_msg.get("search") else None)
-        st.session_state.messages.append({"role": "assistant", **result})
+        try:
+            result = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False))
+            st.session_state.messages.append({"role": "assistant", **result})
+        except Exception as e:
+            st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}", "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": False, "think": False, "reasoning": None})
         st.session_state["show"] = None
-    elif kind == "info":
-        cur = st.session_state.get("show")
-        st.session_state["show"] = None if cur == ("info", i) else ("info", i)
     elif kind == "edit":
         st.session_state["editing"] = i
         st.session_state["show"] = None
@@ -314,8 +334,11 @@ if pending is not None:
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
     is_look_back = text.strip().lower() == "look_back"
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
-    result = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None, look_back=is_look_back)
-    st.session_state.messages.append({"role": "assistant", **result})
+    try:
+        result = ask(use_search=use_search, use_think=use_think, look_back=is_look_back)
+        st.session_state.messages.append({"role": "assistant", **result})
+    except Exception as e:
+        st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}", "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": None})
     st.session_state["editing"] = None
     st.rerun()
 
@@ -346,13 +369,6 @@ for i, m in enumerate(st.session_state.messages):
                     if st.button("Edit", key=f"ue{i}"):
                         st.session_state["act"] = ("edit", i)
                         st.rerun()
-            if show == ("info", i):
-                st.html(info_html(m))
-                st.markdown('<div class="close-row">', unsafe_allow_html=True)
-                if st.button(CLOSE_GLYPH + " close", key=f"cl{i}"):
-                    st.session_state["act"] = ("close", i)
-                    st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
     else:
         reasoning = m.get("reasoning")
         if m.get("think"):
@@ -372,13 +388,6 @@ for i, m in enumerate(st.session_state.messages):
                 if st.button("Retry", key=f"ar{i}"):
                     st.session_state["act"] = ("retry", i)
                     st.rerun()
-        if show == ("info", i):
-            st.html(info_html(m))
-            st.markdown('<div class="close-row">', unsafe_allow_html=True)
-            if st.button(CLOSE_GLYPH + " close", key=f"cla{i}"):
-                st.session_state["act"] = ("close", i)
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
 
 prompt = get_prompt()
 if prompt:
