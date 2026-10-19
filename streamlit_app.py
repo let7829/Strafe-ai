@@ -45,6 +45,7 @@ export default function(component){
         const val=input.value.trim();
         if(!val)return;
         setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive});
+        input.value='';
     }
     btn.onclick=send;
     input.onkeydown=function(e){if(e.key==='Enter')send();};
@@ -197,11 +198,13 @@ def build_payload(history, model_override=None):
         kw["reasoning_format"] = "parsed"
     return kw
 
-def ask(use_search=False, use_think=False, search_query=None):
+def ask(use_search=False, use_think=False, search_query=None, look_back=False):
     t0 = time.time()
     last_err = None
-    history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-    tool_calls_made = 0
+    if look_back:
+        history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+    else:
+        history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages[-15:]]
 
     tools = None
     if use_search:
@@ -209,11 +212,11 @@ def ask(use_search=False, use_think=False, search_query=None):
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web for current information. USE THIS TOOL FREELY for any factual question, recent events, pricing, documentation, code references, product info, news, or anything where accuracy matters. Prefer searching over relying on training data. When in doubt, search. Note: results include snippets which are usually sufficient. If the snippet lacks detail, tell the user to visit the provided link for full content.",
+                "description": "Search the web for current info. USE THIS FREELY for facts, news, or code. Prefer searching over guessing.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "The search query to look up"}
+                        "query": {"type": "string", "description": "The search query"}
                     },
                     "required": ["query"]
                 }
@@ -221,6 +224,8 @@ def ask(use_search=False, use_think=False, search_query=None):
         }]
 
     max_rounds = 5 if use_search else 1
+    tool_calls_made = 0
+
     for _ in range(max_rounds):
         key = get_working_key()
         kwargs = build_payload(history)
@@ -245,7 +250,7 @@ def ask(use_search=False, use_think=False, search_query=None):
         if tools and getattr(msg, "tool_calls", None):
             tool_calls_made += len(msg.tool_calls)
             if tool_calls_made > 5:
-                raise RuntimeError("Tool call limit reached: model requested too many searches")
+                raise RuntimeError("Tool call limit reached")
             assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
             for tc in msg.tool_calls:
                 assistant_msg["tool_calls"].append({
@@ -314,8 +319,9 @@ if pending is not None:
     text = pending.get("text", "") if isinstance(pending, dict) else pending
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
+    is_look_back = text.strip().lower() == "look_back"
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
-    result = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None)
+    result = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None, look_back=is_look_back)
     st.session_state.messages.append({"role": "assistant", **result})
     st.session_state["editing"] = None
     st.rerun()
