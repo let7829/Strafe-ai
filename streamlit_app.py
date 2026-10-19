@@ -21,6 +21,9 @@ INPUT_CSS = """
 .att{position:relative;width:56px;height:56px;border-radius:12px;overflow:hidden;border:1px solid #2a2a2a;flex-shrink:0;}
 .att img{width:100%;height:100%;object-fit:cover;display:block;}
 .att-x{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(0,0,0,0.75);color:#fff;font-size:0.65rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
+.att-file{position:relative;display:flex;align-items:center;gap:6px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:8px 12px;font-size:0.8rem;color:#bdbdbd;font-family:'Space Grotesk',sans-serif;max-width:200px;}
+.att-file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+.att-file-x{width:18px;height:18px;border-radius:50%;border:none;background:rgba(255,255,255,0.1);color:#fff;font-size:0.6rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;}
 #tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
 .tool-btn{height:32px;border-radius:16px;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:0.85rem;cursor:pointer;display:flex;align-items:center;gap:6px;padding:0 12px;transition:all 0.2s;font-family:'Space Grotesk',sans-serif;}
 .tool-btn .icon{font-size:1rem;line-height:1;}
@@ -55,6 +58,7 @@ export default function(component){
     const atts=parentElement.querySelector('#atts');
     const photoBtn=parentElement.querySelector('#mb-photo');
     const cameraBtn=parentElement.querySelector('#mb-camera');
+    const fileBtn=parentElement.querySelector('#mb-file');
     const btnSearch=parentElement.querySelector('#btn-search');
     const btnThink=parentElement.querySelector('#btn-think');
     const camOverlay=parentElement.querySelector('#cam-overlay');
@@ -66,10 +70,17 @@ export default function(component){
     let searchActive=false;
     let thinkActive=false;
     let attachments=[];
+    let fileAttachments=[];
     let camStream=null;
+    const TEXT_EXTS=['txt','md','csv','json','py','js','ts','jsx','tsx','html','css','xml','yaml','yml','toml','ini','cfg','conf','log','sh','bash','zsh','sql','r','rb','go','rs','c','cpp','h','hpp','java','kt','swift','php','pl','lua','asm','s','makefile','dockerfile','env','gitignore','editorconfig'];
+    const imageInput=document.createElement('input');
+    imageInput.type='file';
+    imageInput.accept='image/*';
+    imageInput.style.display='none';
+    parentElement.appendChild(imageInput);
     const fileInput=document.createElement('input');
     fileInput.type='file';
-    fileInput.accept='image/*';
+    fileInput.accept='.txt,.md,.csv,.json,.py,.js,.ts,.jsx,.tsx,.html,.css,.xml,.yaml,.yml,.toml,.ini,.cfg,.conf,.log,.sh,.bash,.zsh,.sql,.r,.rb,.go,.rs,.c,.cpp,.h,.hpp,.java,.kt,.swift,.php,.pl,.lua,.asm,.s,.makefile,.dockerfile,.env,.gitignore,.editorconfig,text/*';
     fileInput.style.display='none';
     parentElement.appendChild(fileInput);
     function resizeImage(dataUrl,maxSize){
@@ -109,6 +120,25 @@ export default function(component){
             wrap.appendChild(x);
             atts.appendChild(wrap);
         });
+        fileAttachments.forEach(function(item,idx){
+            const wrap=document.createElement('div');
+            wrap.className='att-file';
+            const name=document.createElement('span');
+            name.className='att-file-name';
+            name.textContent='\\u2399 '+item.name;
+            const x=document.createElement('button');
+            x.type='button';
+            x.className='att-file-x';
+            x.textContent='\\u2715';
+            x.onclick=function(ev){
+                ev.stopPropagation();
+                fileAttachments.splice(idx,1);
+                renderAtts();
+            };
+            wrap.appendChild(name);
+            wrap.appendChild(x);
+            atts.appendChild(wrap);
+        });
     }
     function stopCamera(){
         if(camStream){
@@ -144,14 +174,15 @@ export default function(component){
     }
     async function send(){
         const val=input.value.trim();
-        if(!val&&!attachments.length)return;
+        if(!val&&!attachments.length&&!fileAttachments.length)return;
         const resized=[];
         for(let i=0;i<attachments.length;i++){
             resized.push(await resizeImage(attachments[i],1024));
         }
-        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:resized});
+        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:resized,files:fileAttachments.slice()});
         input.value='';
         attachments=[];
+        fileAttachments=[];
         renderAtts();
     }
     btn.onclick=send;
@@ -160,25 +191,21 @@ export default function(component){
         plusBtn.onclick=function(){
             menu.classList.toggle('open');
         };
-        const actions={'mb-file':'file'};
-        Object.keys(actions).forEach(function(id){
-            const b=parentElement.querySelector('#'+id);
-            if(b){
-                b.onclick=function(){
-                    setTriggerValue('menu_action',actions[id]);
-                    menu.classList.remove('open');
-                };
-            }
-        });
     }
     if(photoBtn){
         photoBtn.onclick=function(){
             menu.classList.remove('open');
-            fileInput.click();
+            imageInput.click();
         };
     }
     if(cameraBtn){
         cameraBtn.onclick=openCamera;
+    }
+    if(fileBtn){
+        fileBtn.onclick=function(){
+            menu.classList.remove('open');
+            fileInput.click();
+        };
     }
     if(camClose){
         camClose.onclick=stopCamera;
@@ -186,8 +213,8 @@ export default function(component){
     if(camCapture){
         camCapture.onclick=capturePhoto;
     }
-    fileInput.onchange=function(){
-        const f=fileInput.files[0];
+    imageInput.onchange=function(){
+        const f=imageInput.files[0];
         if(!f)return;
         const reader=new FileReader();
         reader.onload=function(){
@@ -195,6 +222,28 @@ export default function(component){
             renderAtts();
         };
         reader.readAsDataURL(f);
+        imageInput.value='';
+    };
+    fileInput.onchange=function(){
+        const f=fileInput.files[0];
+        if(!f)return;
+        const ext=f.name.split('.').pop().toLowerCase();
+        if(!TEXT_EXTS.includes(ext)&&!f.type.startsWith('text/')){
+            setTriggerValue('menu_action','unsupported_file');
+            fileInput.value='';
+            return;
+        }
+        if(f.size>500000){
+            setTriggerValue('menu_action','file_too_large');
+            fileInput.value='';
+            return;
+        }
+        const reader=new FileReader();
+        reader.onload=function(){
+            fileAttachments.push({name:f.name,content:reader.result});
+            renderAtts();
+        };
+        reader.readAsText(f);
         fileInput.value='';
     };
     btnSearch.onclick=function(){
@@ -246,6 +295,7 @@ div[data-testid='stHorizontalBlock'] > div:nth-child(2) div[data-testid='stPopov
 .user-bubble{display:flex;justify-content:flex-end;width:100%;margin:10px 0 0 0;}
 .user-bubble-inner{background:#5c5c5c;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
 .chat-thumb{width:64px;height:64px;object-fit:cover;border-radius:12px;margin:0 8px 6px 0;vertical-align:middle;border:1px solid #2a2a2a;}
+.file-badge{display:inline-flex;align-items:center;gap:4px;background:#2a2a2a;border-radius:8px;padding:4px 10px;font-size:0.75rem;color:#bdbdbd;margin:0 8px 6px 0;font-family:'Space Grotesk',sans-serif;}
 div[data-testid='stPopover']{margin:0 !important;max-width:100% !important;}
 div[data-testid='stPopover'] button{height:20px !important;min-height:0 !important;padding:0 4px !important;font-size:1rem !important;line-height:1 !important;color:#7a7a7a !important;background:transparent !important;border:none !important;box-shadow:none !important;}
 div[data-testid='stPopover'] button:hover{color:#fff !important;}
@@ -341,19 +391,32 @@ def web_search(query, num_results=3):
 
 def msg_to_api(m, distance_from_latest=None, full_res=False):
     imgs = m.get("images") or []
-    if not imgs:
+    files = m.get("files") or []
+    has_media = bool(imgs or files)
+    if not has_media:
         return {"role": m["role"], "content": m["content"]}
-    if distance_from_latest is not None and not full_res:
-        if distance_from_latest >= 15:
-            return {"role": m["role"], "content": m["content"]}
-        elif distance_from_latest >= 3:
-            parts = [{"type": "text", "text": m["content"]}]
-            for u in imgs:
-                parts.append({"type": "image_url", "image_url": {"url": u, "detail": "low"}})
-            return {"role": m["role"], "content": parts}
+    
     parts = [{"type": "text", "text": m["content"]}]
-    for u in imgs:
-        parts.append({"type": "image_url", "image_url": {"url": u}})
+    
+    for f in files:
+        fname = f.get("name", "file")
+        fcontent = f.get("content", "")
+        parts.insert(0, {"type": "text", "text": f"[Attached file: {fname}]\n```\n{fcontent}\n```"})
+    
+    if imgs:
+        if distance_from_latest is not None and not full_res:
+            if distance_from_latest >= 15:
+                pass
+            elif distance_from_latest >= 3:
+                for u in imgs:
+                    parts.append({"type": "image_url", "image_url": {"url": u, "detail": "low"}})
+            else:
+                for u in imgs:
+                    parts.append({"type": "image_url", "image_url": {"url": u}})
+        else:
+            for u in imgs:
+                parts.append({"type": "image_url", "image_url": {"url": u}})
+    
     return {"role": m["role"], "content": parts}
 
 def build_payload(history):
@@ -512,10 +575,11 @@ if pending is not None:
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
     images = pending.get("images", []) if isinstance(pending, dict) else []
+    files = pending.get("files", []) if isinstance(pending, dict) else []
     raw = text.strip().lower()
     is_look_back = raw == "look_back"
     is_clearer = raw == "clearer_image_back"
-    st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "images": images})
+    st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "images": images, "files": files})
     try:
         result = ask(use_search=use_search, use_think=use_think, look_back=is_look_back, clearer_image_back=is_clearer)
         st.session_state.messages.append({"role": "assistant", **result})
@@ -535,7 +599,7 @@ for i, m in enumerate(st.session_state.messages):
             with sc:
                 if st.button("Save", key=f"sv{i}"):
                     st.session_state.messages = st.session_state.messages[:i]
-                    st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False), "images": m.get("images", [])}
+                    st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False), "images": m.get("images", []), "files": m.get("files", [])}
                     st.rerun()
             with sk:
                 if st.button("Cancel", key=f"cx{i}"):
@@ -544,7 +608,8 @@ for i, m in enumerate(st.session_state.messages):
         else:
             safe = H.escape(m["content"]).replace("\n", "<br>")
             thumbs = "".join(f'<img class="chat-thumb" src="{u}"/>' for u in (m.get("images") or []))
-            st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{thumbs}{safe}</div></div>')
+            file_badges = "".join(f'<span class="file-badge">\u2399 {H.escape(f.get("name","file"))}</span>' for f in (m.get("files") or []))
+            st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{thumbs}{file_badges}{safe}</div></div>')
             _sp, _mn = st.columns([5, 1])
             with _mn:
                 with st.popover(MENU_GLYPH, key=f"mu{i}"):
@@ -581,5 +646,9 @@ ma = st.session_state.pop("menu_action", None)
 if ma:
     if ma == "camera_error":
         st.toast("Camera access denied or unavailable")
+    elif ma == "unsupported_file":
+        st.toast("Unsupported file type. Use text/code files only.")
+    elif ma == "file_too_large":
+        st.toast("File too large. Max 500KB for text files.")
     else:
         st.toast(f"{ma} selected")
