@@ -59,6 +59,23 @@ export default function(component){
     fileInput.accept='image/*';
     fileInput.style.display='none';
     parentElement.appendChild(fileInput);
+    function resizeImage(dataUrl,maxSize){
+        return new Promise(function(resolve){
+            const img=new Image();
+            img.onload=function(){
+                const c=document.createElement('canvas');
+                let w=img.width,h=img.height;
+                if(w>maxSize||h>maxSize){
+                    if(w>h){h=Math.round(h*maxSize/w);w=maxSize;}
+                    else{w=Math.round(w*maxSize/h);h=maxSize;}
+                }
+                c.width=w;c.height=h;
+                c.getContext('2d').drawImage(img,0,0,w,h);
+                resolve(c.toDataURL('image/jpeg',0.8));
+            };
+            img.src=dataUrl;
+        });
+    }
     function renderAtts(){
         atts.innerHTML='';
         attachments.forEach(function(item,idx){
@@ -84,10 +101,14 @@ export default function(component){
         btnSearch.querySelector('.label').textContent=searchActive?'Searching':'Search';
         btnThink.querySelector('.label').textContent=thinkActive?'Thinking':'Think';
     }
-    function send(){
+    async function send(){
         const val=input.value.trim();
         if(!val&&!attachments.length)return;
-        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:attachments.slice()});
+        const resized=[];
+        for(let i=0;i<attachments.length;i++){
+            resized.push(await resizeImage(attachments[i],1024));
+        }
+        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:resized});
         input.value='';
         attachments=[];
         renderAtts();
@@ -199,7 +220,6 @@ if not KEYS:
     st.stop()
 
 PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-VISION_PREFERRED = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct", "llama-3.2-90b-vision-instruct", "llama-3.2-11b-vision-instruct"]
 SYSTEM = (
     "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\n"
     "I match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\n"
@@ -208,37 +228,31 @@ SYSTEM = (
     "CRITICAL: Your internal training data ends in early 2025. If the user asks about recent events, YOU MUST USE the web_search TOOL. Do not guess."
 )
 SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
+HISTORY_LIMIT = 30
 
-def pick_model(vision=False):
-    cache_key = "model_vision" if vision else "model"
-    if cache_key in st.session_state:
-        return st.session_state[cache_key]
+def pick_model():
+    if "model" in st.session_state:
+        return st.session_state.model
     try:
         response = Groq(api_key=KEYS[0]).models.list()
         avail = {m.id if hasattr(m, 'id') else m[0] for m in response.data}
     except Exception:
         avail = set()
-    pref = VISION_PREFERRED if vision else PREFERRED
-    for p in pref:
+    for p in PREFERRED:
         if p in avail:
-            st.session_state[cache_key] = p
+            st.session_state.model = p
             return p
-    if vision:
-        vavail = [a for a in avail if "vision" in a.lower() or "llama-4" in a.lower()]
-        if vavail:
-            st.session_state[cache_key] = vavail[0]
-            return vavail[0]
     safe_avail = avail & SAFE_MODELS
     if safe_avail:
         chosen = list(safe_avail)[0]
-        st.session_state[cache_key] = chosen
+        st.session_state.model = chosen
         return chosen
     if avail:
         chosen = list(avail)[0]
-        st.session_state[cache_key] = chosen
+        st.session_state.model = chosen
         return chosen
-    st.session_state[cache_key] = pref[0]
-    return pref[0]
+    st.session_state.model = PREFERRED[0]
+    return PREFERRED[0]
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -275,25 +289,32 @@ def web_search(query, num_results=3):
     except Exception as e:
         return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. Tell the user."}]
 
-def msg_to_api(m):
+def msg_to_api(m, distance_from_latest=None, full_res=False):
     imgs = m.get("images") or []
-    if imgs:
-        parts = [{"type": "text", "text": m["content"]}]
-        for u in imgs:
-            parts.append({"type": "image_url", "image_url": {"url": u}})
-        return {"role": m["role"], "content": parts}
-    return {"role": m["role"], "content": m["content"]}
+    if not imgs:
+        return {"role": m["role"], "content": m["content"]}
+    if distance_from_latest is not None and not full_res:
+        if distance_from_latest >= 15:
+            return {"role": m["role"], "content": m["content"]}
+        elif distance_from_latest >= 3:
+            parts = [{"type": "text", "text": m["content"]}]
+            for u in imgs:
+                parts.append({"type": "image_url", "image_url": {"url": u, "detail": "low"}})
+            return {"role": m["role"], "content": parts}
+    parts = [{"type": "text", "text": m["content"]}]
+    for u in imgs:
+        parts.append({"type": "image_url", "image_url": {"url": u}})
+    return {"role": m["role"], "content": parts}
 
-def build_payload(history, vision=False):
-    model = pick_model(vision)
+def build_payload(history):
+    model = pick_model()
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
-    if not vision:
-        if "qwen" in model.lower():
-            kw["reasoning_format"] = "parsed"
-        elif "gpt-oss" in model.lower():
-            kw["reasoning_effort"] = "medium"
-            kw["reasoning_format"] = "parsed"
+    if "qwen" in model.lower():
+        kw["reasoning_format"] = "parsed"
+    elif "gpt-oss" in model.lower():
+        kw["reasoning_effort"] = "medium"
+        kw["reasoning_format"] = "parsed"
     return kw
 
 def call_groq_with_retry(kwargs):
@@ -308,7 +329,6 @@ def call_groq_with_retry(kwargs):
             return Groq(api_key=key).chat.completions.create(**kwargs), None
         except NotFoundError:
             st.session_state.pop("model", None)
-            st.session_state.pop("model_vision", None)
             mark_key_failed(key)
             last_err = "model gone"
             continue
@@ -320,11 +340,18 @@ def call_groq_with_retry(kwargs):
             continue
     return None, last_err
 
-def ask(use_search=False, use_think=False, look_back=False):
+def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=False):
     t0 = time.time()
-    slice_msgs = st.session_state.messages if look_back else st.session_state.messages[-15:]
-    vision = any(m.get("images") for m in slice_msgs)
-    history = [msg_to_api(m) for m in slice_msgs]
+    if look_back or clearer_image_back:
+        slice_msgs = st.session_state.messages
+    else:
+        slice_msgs = st.session_state.messages[-HISTORY_LIMIT:]
+    
+    total = len(slice_msgs)
+    history = []
+    for idx, m in enumerate(slice_msgs):
+        distance = total - 1 - idx
+        history.append(msg_to_api(m, distance_from_latest=distance, full_res=clearer_image_back))
 
     tools = None
     if use_search:
@@ -351,7 +378,7 @@ def ask(use_search=False, use_think=False, look_back=False):
     last_err = None
 
     for round_idx in range(max_rounds):
-        kwargs = build_payload(history, vision)
+        kwargs = build_payload(history)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "required" if round_idx == 0 and tool_calls_made == 0 else "auto"
@@ -435,10 +462,12 @@ if pending is not None:
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
     images = pending.get("images", []) if isinstance(pending, dict) else []
-    is_look_back = text.strip().lower() == "look_back"
+    raw = text.strip().lower()
+    is_look_back = raw == "look_back"
+    is_clearer = raw == "clearer_image_back"
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "images": images})
     try:
-        result = ask(use_search=use_search, use_think=use_think, look_back=is_look_back)
+        result = ask(use_search=use_search, use_think=use_think, look_back=is_look_back, clearer_image_back=is_clearer)
         st.session_state.messages.append({"role": "assistant", **result})
     except Exception as e:
         st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}", "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": None})
