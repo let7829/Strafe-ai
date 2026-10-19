@@ -158,8 +158,17 @@ def web_search(query, num_results=3):
     try:
         url = "https://html.duckduckgo.com/html/"
         params = {"q": query}
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
+        }
         resp = requests.get(url, params=params, headers=headers, timeout=8)
+        if resp.status_code != 200 or "anomaly" in resp.text.lower():
+            return [{"title": "Blocked", "link": "", "snippet": "DuckDuckGo blocked the search. You must rely on your training data and explicitly tell the user your search failed."}]
         soup = BeautifulSoup(resp.text, "html.parser")
         results = []
         for item in soup.select(".result")[:num_results]:
@@ -168,7 +177,7 @@ def web_search(query, num_results=3):
             if not title_tag:
                 continue
             title = title_tag.get_text(strip=True)
-            link = title_tag["href"]
+            link = title_tag.get("href", "")
             snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
             results.append({"title": title, "link": link, "snippet": snippet})
         if not results:
@@ -177,14 +186,14 @@ def web_search(query, num_results=3):
                 snippet_tag = item.select_one(".result__snippet")
                 if title_tag:
                     title = title_tag.get_text(strip=True)
-                    link = title_tag["href"]
+                    link = title_tag.get("href", "")
                     snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
                     results.append({"title": title, "link": link, "snippet": snippet})
         if not results:
-            return [{"title": "No results", "link": "", "snippet": "No results found"}]
+            return [{"title": "Failed", "link": "", "snippet": "No results found. You must rely on your training data and explicitly tell the user your search failed."}]
         return results
     except Exception as e:
-        return [{"title": "Search error", "link": "", "snippet": str(e)}]
+        return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. You must rely on your training data and explicitly tell the user your search failed."}]
 
 def build_payload(history, model_override=None):
     model = model_override or pick_model()
@@ -212,7 +221,7 @@ def ask(use_search=False, use_think=False, search_query=None, look_back=False):
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web for current info. USE THIS FREELY for facts, news, or code. Prefer searching over guessing.",
+                "description": "Search the web for current info, news, or facts. If the search returns 'Blocked', 'Failed', or 'Error', YOU MUST explicitly tell the user that your web search failed, and then provide your best answer from training data while warning them it might be outdated.",
                 "parameters": {
                     "type": "object",
                     "properties": {
