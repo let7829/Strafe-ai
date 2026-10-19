@@ -3,8 +3,7 @@ import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
 import random, time, html as H, json
 from datetime import datetime
-import requests
-from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
 
 st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercontent.com/let7829/Strafe-ai/refs/heads/main/logo.png", layout="centered")
 
@@ -156,44 +155,19 @@ def mark_key_failed(key):
 
 def web_search(query, num_results=3):
     try:
-        url = "https://html.duckduckgo.com/html/"
-        params = {"q": query}
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "DNT": "1",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1"
-        }
-        resp = requests.get(url, params=params, headers=headers, timeout=8)
-        if resp.status_code != 200 or "anomaly" in resp.text.lower():
-            return [{"title": "Blocked", "link": "", "snippet": "DuckDuckGo blocked the search. You must rely on your training data and explicitly tell the user your search failed."}]
-        soup = BeautifulSoup(resp.text, "html.parser")
         results = []
-        for item in soup.select(".result")[:num_results]:
-            title_tag = item.select_one(".result__title a")
-            snippet_tag = item.select_one(".result__snippet")
-            if not title_tag:
-                continue
-            title = title_tag.get_text(strip=True)
-            link = title_tag.get("href", "")
-            snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
-            results.append({"title": title, "link": link, "snippet": snippet})
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=num_results):
+                results.append({
+                    "title": r.get("title", ""),
+                    "link": r.get("href", ""),
+                    "snippet": r.get("body", "")
+                })
         if not results:
-            for item in soup.select(".result__body")[:num_results]:
-                title_tag = item.select_one(".result__title a")
-                snippet_tag = item.select_one(".result__snippet")
-                if title_tag:
-                    title = title_tag.get_text(strip=True)
-                    link = title_tag.get("href", "")
-                    snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
-                    results.append({"title": title, "link": link, "snippet": snippet})
-        if not results:
-            return [{"title": "Failed", "link": "", "snippet": "No results found. You must rely on your training data and explicitly tell the user your search failed."}]
+            return [{"title": "No results", "link": "", "snippet": "No results found. You must rely on training data and tell the user the search failed."}]
         return results
     except Exception as e:
-        return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. You must rely on your training data and explicitly tell the user your search failed."}]
+        return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. You must rely on training data and tell the user the search failed."}]
 
 def build_payload(history, model_override=None):
     model = model_override or pick_model()
