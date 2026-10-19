@@ -13,7 +13,7 @@ MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 PLUS_GLYPH = "\uff0b"
 
-INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div>'
+INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
 #atts{display:flex;gap:8px;width:100%;max-width:760px;flex-wrap:wrap;padding-left:4px;box-sizing:border-box;}
@@ -38,6 +38,12 @@ INPUT_CSS = """
 #menu.open{max-height:60px;opacity:1;}
 .menu-btn{height:40px;border-radius:14px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;padding:0 18px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;white-space:nowrap;}
 .menu-btn:hover{border-color:#4f8dff;color:#fff;}
+#cam-overlay{display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:#000;z-index:10000000;flex-direction:column;align-items:center;justify-content:flex-end;}
+#cam-overlay.active{display:flex;}
+#cam-video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
+#cam-close{position:absolute;top:16px;right:16px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);color:#fff;font-size:1.4rem;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:10000001;}
+#cam-capture{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:#fff;margin-bottom:40px;z-index:10000001;cursor:pointer;flex-shrink:0;}
+#cam-capture:active{transform:scale(0.9);}
 """
 INPUT_JS = """
 export default function(component){
@@ -48,12 +54,19 @@ export default function(component){
     const menu=parentElement.querySelector('#menu');
     const atts=parentElement.querySelector('#atts');
     const photoBtn=parentElement.querySelector('#mb-photo');
+    const cameraBtn=parentElement.querySelector('#mb-camera');
     const btnSearch=parentElement.querySelector('#btn-search');
     const btnThink=parentElement.querySelector('#btn-think');
+    const camOverlay=parentElement.querySelector('#cam-overlay');
+    const camVideo=parentElement.querySelector('#cam-video');
+    const camClose=parentElement.querySelector('#cam-close');
+    const camCapture=parentElement.querySelector('#cam-capture');
+    const camCanvas=parentElement.querySelector('#cam-canvas');
     if(!input||!btn)return;
     let searchActive=false;
     let thinkActive=false;
     let attachments=[];
+    let camStream=null;
     const fileInput=document.createElement('input');
     fileInput.type='file';
     fileInput.accept='image/*';
@@ -97,6 +110,34 @@ export default function(component){
             atts.appendChild(wrap);
         });
     }
+    function stopCamera(){
+        if(camStream){
+            camStream.getTracks().forEach(function(t){t.stop();});
+            camStream=null;
+        }
+        camOverlay.classList.remove('active');
+    }
+    async function openCamera(){
+        try{
+            camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+            camVideo.srcObject=camStream;
+            camOverlay.classList.add('active');
+            menu.classList.remove('open');
+        }catch(e){
+            setTriggerValue('menu_action','camera_error');
+        }
+    }
+    async function capturePhoto(){
+        if(!camStream)return;
+        camCanvas.width=camVideo.videoWidth;
+        camCanvas.height=camVideo.videoHeight;
+        camCanvas.getContext('2d').drawImage(camVideo,0,0);
+        const dataUrl=camCanvas.toDataURL('image/jpeg',0.9);
+        stopCamera();
+        const resized=await resizeImage(dataUrl,1024);
+        attachments.push(resized);
+        renderAtts();
+    }
     function updateLabels(){
         btnSearch.querySelector('.label').textContent=searchActive?'Searching':'Search';
         btnThink.querySelector('.label').textContent=thinkActive?'Thinking':'Think';
@@ -119,7 +160,7 @@ export default function(component){
         plusBtn.onclick=function(){
             menu.classList.toggle('open');
         };
-        const actions={'mb-camera':'camera','mb-file':'file'};
+        const actions={'mb-file':'file'};
         Object.keys(actions).forEach(function(id){
             const b=parentElement.querySelector('#'+id);
             if(b){
@@ -135,6 +176,15 @@ export default function(component){
             menu.classList.remove('open');
             fileInput.click();
         };
+    }
+    if(cameraBtn){
+        cameraBtn.onclick=openCamera;
+    }
+    if(camClose){
+        camClose.onclick=stopCamera;
+    }
+    if(camCapture){
+        camCapture.onclick=capturePhoto;
     }
     fileInput.onchange=function(){
         const f=fileInput.files[0];
@@ -529,4 +579,7 @@ if prompt:
 
 ma = st.session_state.pop("menu_action", None)
 if ma:
-    st.toast(f"{ma} selected")
+    if ma == "camera_error":
+        st.toast("Camera access denied or unavailable")
+    else:
+        st.toast(f"{ma} selected")
