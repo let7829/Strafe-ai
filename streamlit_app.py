@@ -109,7 +109,13 @@ st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
 PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy—you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier—I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple.\n\nWhen web_search is available, USE IT. Prefer searching over guessing."
+SYSTEM = (
+    "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\n"
+    "I match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\n"
+    "I hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\n"
+    "You are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple.\n\n"
+    "CRITICAL INSTRUCTION: Your internal training data ends at early 2025. If the user asks a question answer it with web search (like current events, new technology, or recent financial news), YOU MUST USE THE web_search TOOL."
+)
 SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 
 def pick_model():
@@ -156,7 +162,8 @@ def mark_key_failed(key):
 def web_search(query, num_results=3):
     try:
         results = []
-        with DDGS() as ddgs:
+        headers = {"Accept-Encoding": "gzip, deflate, br"}
+        with DDGS(headers=headers) as ddgs:
             for r in ddgs.text(query, max_results=num_results):
                 results.append({
                     "title": r.get("title", ""),
@@ -164,10 +171,10 @@ def web_search(query, num_results=3):
                     "snippet": r.get("body", "")
                 })
         if not results:
-            return [{"title": "No results", "link": "", "snippet": "No results found. You must rely on training data and tell the user the search failed."}]
+            return [{"title": "No results", "link": "", "snippet": "Search returned empty. Rely on training data."}]
         return results
     except Exception as e:
-        return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. You must rely on training data and tell the user the search failed."}]
+        return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. Tell the user."}]
 
 def build_payload(history, model_override=None):
     model = model_override or pick_model()
@@ -195,11 +202,14 @@ def ask(use_search=False, use_think=False, search_query=None, look_back=False):
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web for current info, news, or facts. If the search returns 'Blocked', 'Failed', or 'Error', YOU MUST explicitly tell the user that your web search failed, and then provide your best answer from training data while warning them it might be outdated.",
+                "description": "Search the web for current info, news, or facts. If the user asks about recent events (like 2026 news), YOU MUST USE THIS TOOL. DO NOT fake the search. If the search returns 'No results' or 'Error', tell the user.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "The search query"}
+                        "query": {
+                            "type": "string",
+                            "description": "The search query. ALWAYS fix spelling mistakes and use clean keywords. (e.g., 'first trillionaire Elon Musk 2026', NOT 'for who first trillionare')."
+                        }
                     },
                     "required": ["query"]
                 }
