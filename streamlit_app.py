@@ -1,4 +1,3 @@
-
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
@@ -12,9 +11,9 @@ st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercont
 SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
-PLUS_GLYPH = "\u002b"
+PLUS_GLYPH = "\uff0b"
 
-INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div></div>'
+INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
 #tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
@@ -30,6 +29,10 @@ INPUT_CSS = """
 .icon-btn:hover{color:#fff;}
 #sb{width:38px;height:38px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 #sb:hover{background:#2563eb;}
+#menu{display:flex;gap:8px;width:100%;max-width:760px;justify-content:center;overflow:hidden;max-height:0;opacity:0;transition:max-height 0.25s ease,opacity 0.2s ease;}
+#menu.open{max-height:60px;opacity:1;}
+.menu-btn{height:40px;border-radius:14px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;padding:0 18px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;white-space:nowrap;}
+.menu-btn:hover{border-color:#4f8dff;color:#fff;}
 """
 INPUT_JS = """
 export default function(component){
@@ -37,6 +40,7 @@ export default function(component){
     const input=parentElement.querySelector('#ci');
     const btn=parentElement.querySelector('#sb');
     const plusBtn=parentElement.querySelector('#pb');
+    const menu=parentElement.querySelector('#menu');
     const btnSearch=parentElement.querySelector('#btn-search');
     const btnThink=parentElement.querySelector('#btn-think');
     if(!input||!btn)return;
@@ -54,10 +58,20 @@ export default function(component){
     }
     btn.onclick=send;
     input.onkeydown=function(e){if(e.key==='Enter')send();};
-    if(plusBtn){
+    if(plusBtn&&menu){
         plusBtn.onclick=function(){
-            setTriggerValue('plus_clicked',Date.now());
+            menu.classList.toggle('open');
         };
+        const actions={'mb-photo':'photo','mb-camera':'camera','mb-file':'file'};
+        Object.keys(actions).forEach(function(id){
+            const b=parentElement.querySelector('#'+id);
+            if(b){
+                b.onclick=function(){
+                    setTriggerValue('menu_action',actions[id]);
+                    menu.classList.remove('open');
+                };
+            }
+        });
     }
     btnSearch.onclick=function(){
         searchActive=!searchActive;
@@ -78,8 +92,9 @@ def get_prompt():
     result = chat_input(key="strafe_inp", on_submitted_change=lambda: None)
     if not result:
         return None
-    if getattr(result, "plus_clicked", None):
-        st.session_state["plus_triggered"] = True
+    ma = getattr(result, "menu_action", None)
+    if ma:
+        st.session_state["menu_action"] = ma
     submitted = getattr(result, "submitted", None)
     if submitted:
         return submitted
@@ -409,5 +424,6 @@ if prompt:
     st.session_state["pending"] = prompt
     st.rerun()
 
-if st.session_state.pop("plus_triggered", False):
-    st.toast("+ clicked")
+ma = st.session_state.pop("menu_action", None)
+if ma:
+    st.toast(f"{ma} selected")
