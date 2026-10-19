@@ -1,18 +1,20 @@
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
-import random, time, html as H, json, sqlite3, os
+import random, time, html as H, json, sqlite3
 from datetime import datetime
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException
 import uuid
 
-st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercontent.com/let7829/Strafe-ai/refs/heads/main/logo.png", layout="centered")
+st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercontent.com/let7829/Strafe-ai/refs/heads/main/logo.png", layout="centered", initial_sidebar_state="collapsed")
 
 SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 PLUS_GLYPH = "\uff0b"
+SIDEBAR_GLYPH = "\uff1d"
+SETTINGS_GLYPH = "\u2699"
 
 DB_PATH = "strafe_data.db"
 
@@ -28,10 +30,7 @@ def load_chats(email):
     db = get_db()
     rows = db.execute("SELECT * FROM chats WHERE email=? ORDER BY created DESC", (email,)).fetchall()
     db.close()
-    chats = {}
-    for r in rows:
-        chats[r["id"]] = {"name": r["name"], "messages": json.loads(r["messages"]), "created": r["created"]}
-    return chats
+    return {r["id"]: {"name": r["name"], "messages": json.loads(r["messages"]), "created": r["created"]} for r in rows}
 
 def save_chat(email, chat_id, name, messages):
     db = get_db()
@@ -72,6 +71,10 @@ if "operator" not in st.session_state:
     st.session_state.operator = "groq"
 if "failed_keys" not in st.session_state:
     st.session_state.failed_keys = set()
+if "sidebar_open" not in st.session_state:
+    st.session_state.sidebar_open = False
+if "settings_open" not in st.session_state:
+    st.session_state.settings_open = False
 
 guest_email = "__guest__"
 active_email = st.session_state.user_email if st.session_state.logged_in else guest_email
@@ -187,54 +190,101 @@ def get_prompt():
         return submitted
     return None
 
-PAGE_CSS = """
+sidebar_css = "section[data-testid='stSidebar']{display:none !important;}" if not st.session_state.sidebar_open else "section[data-testid='stSidebar']{display:block !important;}"
+PAGE_CSS = f"""
 <link href='https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap' rel='stylesheet'>
 <style>
-html,body,[class*='css'],.stApp,#root,.main,.block-container{font-family:'Space Grotesk',sans-serif;background-color:#0a0a0a !important;color:#ececec !important;}
-html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
-section.main .block-container{padding:0 1rem 160px 1rem !important;max-width:760px;overflow-x:hidden;}
-#MainMenu,footer,header{visibility:hidden;}
-div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:8px 0 0 0 !important;margin:0 !important;}
-div[data-testid^='stChatMessageAvatar']{display:none !important;}
-div[data-testid='stChatMessage'] .stMarkdown p{color:#ececec !important;font-size:1.08rem;line-height:1.6;}
-.brand{text-align:center;padding:8px 0 2px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
-.user-bubble{display:flex;justify-content:flex-end;width:100%;margin:10px 0 0 0;}
-.user-bubble-inner{background:#5c5c5c;color:#fff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
-.chat-thumb{width:64px;height:64px;object-fit:cover;border-radius:12px;margin:0 8px 6px 0;vertical-align:middle;border:1px solid #2a2a2a;}
-.file-badge{display:inline-flex;align-items:center;gap:4px;background:#2a2a2a;border-radius:8px;padding:4px 10px;font-size:0.75rem;color:#bdbdbd;margin:0 8px 6px 0;}
-.info-line{color:#8a8a8a !important;font-size:0.82rem !important;padding:2px 0 6px 0;}
-.info-line span{color:#bdbdbd;}
-div[data-testid='stExpander'] details{background:#1a1a1a !important;border:1px solid #2a2a2a !important;border-radius:12px !important;padding:8px 12px !important;margin:8px 0 !important;}
-div[data-testid='stExpander'] summary{color:#8a8a8a !important;font-size:0.85rem !important;}
-div[data-testid='stExpander'] .stMarkdown{color:#bdbdbd !important;font-size:0.9rem !important;}
-section[data-testid='stSidebar']{background:#111 !important;border-right:1px solid #2a2a2a !important;}
-section[data-testid='stSidebar'] .stMarkdown{color:#ececec !important;}
+html,body,[class*='css'],.stApp,#root,.main,.block-container{{font-family:'Space Grotesk',sans-serif;background-color:#0a0a0a !important;color:#ececec !important;}}
+html,body,.stApp,#root{{overflow-x:hidden !important;max-width:100vw !important;}}
+section.main .block-container{{padding:0 1rem 160px 1rem !important;max-width:760px;overflow-x:hidden;}}
+#MainMenu,footer,header{{visibility:hidden;}}
+div[data-testid='stChatMessage']{{background:transparent !important;border:none !important;padding:8px 0 0 0 !important;margin:0 !important;}}
+div[data-testid^='stChatMessageAvatar']{{display:none !important;}}
+div[data-testid='stChatMessage'] .stMarkdown p{{color:#ececec !important;font-size:1.08rem;line-height:1.6;}}
+.brand{{font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}}
+.top-bar{{display:flex;align-items:center;justify-content:space-between;padding:8px 4px 2px 4px;}}
+.top-btn{{background:transparent;border:none;color:#7a7a7a;font-size:1.4rem;cursor:pointer;padding:4px 8px;}}
+.top-btn:hover{{color:#fff;}}
+.user-bubble{{display:flex;justify-content:flex-end;width:100%;margin:10px 0 0 0;}}
+.user-bubble-inner{{background:#5c5c5c;color:#fff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}}
+.chat-thumb{{width:64px;height:64px;object-fit:cover;border-radius:12px;margin:0 8px 6px 0;vertical-align:middle;border:1px solid #2a2a2a;}}
+.file-badge{{display:inline-flex;align-items:center;gap:4px;background:#2a2a2a;border-radius:8px;padding:4px 10px;font-size:0.75rem;color:#bdbdbd;margin:0 8px 6px 0;}}
+.info-line{{color:#8a8a8a !important;font-size:0.82rem !important;padding:2px 0 6px 0;}}
+.info-line span{{color:#bdbdbd;}}
+div[data-testid='stExpander'] details{{background:#1a1a1a !important;border:1px solid #2a2a2a !important;border-radius:12px !important;padding:8px 12px !important;margin:8px 0 !important;}}
+div[data-testid='stExpander'] summary{{color:#8a8a8a !important;font-size:0.85rem !important;}}
+div[data-testid='stExpander'] .stMarkdown{{color:#bdbdbd !important;font-size:0.9rem !important;}}
+section[data-testid='stSidebar']{{background:#111 !important;border-right:1px solid #2a2a2a !important;}}
+section[data-testid='stSidebar'] .stMarkdown{{color:#ececec !important;}}
+{sidebar_css}
 </style>
 """
 st.html(PAGE_CSS)
-st.html("<div class='brand'>STRAFE AI</div>")
+
+tc1, tc2, tc3 = st.columns([1, 3, 1])
+with tc1:
+    if st.button(SIDEBAR_GLYPH, key="toggle_sidebar"):
+        st.session_state.sidebar_open = not st.session_state.sidebar_open
+        st.rerun()
+with tc2:
+    st.html("<div class='brand' style='text-align:center'>STRAFE AI</div>")
+with tc3:
+    if st.button(SETTINGS_GLYPH, key="toggle_settings"):
+        st.session_state.settings_open = not st.session_state.settings_open
+        st.rerun()
+
+if st.session_state.settings_open:
+    with st.dialog("Settings"):
+        tab1, tab2, tab3, tab4 = st.tabs(["Account", "Language", "Models/Operators", "About"])
+        with tab1:
+            if st.session_state.logged_in:
+                st.caption(st.session_state.user_email)
+                if st.button("Log Out", key="dlg_logout"):
+                    st.session_state.logged_in = False
+                    st.session_state.user_email = ""
+                    st.session_state.current_chat_id = None
+                    st.session_state.settings_open = False
+                    st.rerun()
+            else:
+                dlg_email = st.text_input("Email", placeholder="you@example.com", key="dlg_login_email")
+                if st.button("Login", key="dlg_login_btn"):
+                    if dlg_email and "@" in dlg_email:
+                        st.session_state.user_email = dlg_email
+                        st.session_state.logged_in = True
+                        st.session_state.current_chat_id = None
+                        st.session_state.settings_open = False
+                        st.rerun()
+            st.divider()
+            if st.button("Delete All Chats", key="dlg_delete_all", type="secondary"):
+                delete_all_chats(active_email)
+                nc = str(uuid.uuid4())[:8]
+                save_chat(active_email, nc, "New Chat", [])
+                chats.clear()
+                chats[nc] = {"name": "New Chat", "messages": [], "created": datetime.now().isoformat()}
+                st.session_state.current_chat_id = nc
+                st.session_state.settings_open = False
+                st.rerun()
+        with tab2:
+            lang_map = {"English": "en", "Russian": "ru", "Ukrainian": "uk"}
+            rev_lang = {v: k for k, v in lang_map.items()}
+            cur = rev_lang.get(st.session_state.language, "English")
+            chosen = st.radio("Language", list(lang_map.keys()), index=list(lang_map.keys()).index(cur), key="dlg_lang")
+            if lang_map[chosen] != st.session_state.language:
+                st.session_state.language = lang_map[chosen]
+        with tab3:
+            op_labels = {"Groq": "groq", "Celeris": "celeris"}
+            rev_op = {v: k for k, v in op_labels.items()}
+            cur_op = rev_op.get(st.session_state.operator, "Groq")
+            chosen_op = st.radio("Operator", list(op_labels.keys()), index=list(op_labels.keys()).index(cur_op), key="dlg_op",
+                                 captions=["Strong coding/math. Fast responses.", "Fastest model. Skills unknown."])
+            if op_labels[chosen_op] != st.session_state.operator:
+                st.session_state.operator = op_labels[chosen_op]
+        with tab4:
+            st.markdown("Strafe is a project made for your use. No data can be seen by anyone, even by the owner.")
 
 with st.sidebar:
-    st.markdown("### Account")
-    if st.session_state.logged_in:
-        st.caption(st.session_state.user_email)
-        if st.button("Log Out"):
-            st.session_state.logged_in = False
-            st.session_state.user_email = ""
-            st.session_state.current_chat_id = None
-            st.rerun()
-    else:
-        login_email = st.text_input("Email", placeholder="you@example.com", key="login_email_input")
-        if st.button("Login"):
-            if login_email and "@" in login_email:
-                st.session_state.user_email = login_email
-                st.session_state.logged_in = True
-                st.session_state.current_chat_id = None
-                st.rerun()
-    
-    st.divider()
     st.markdown("### Chats")
-    if st.button("+ New Chat"):
+    if st.button("+ New Chat", key="sb_new_chat"):
         cid = str(uuid.uuid4())[:8]
         save_chat(active_email, cid, "New Chat", [])
         st.session_state.current_chat_id = cid
@@ -276,35 +326,9 @@ with st.sidebar:
                 del st.session_state["delete_confirm"]
                 st.rerun()
     
-    st.divider()
-    st.markdown("### Settings")
-    
-    lang_map = {"English": "en", "Russian": "ru", "Ukrainian": "uk"}
-    rev_lang = {v: k for k, v in lang_map.items()}
-    current_lang_label = rev_lang.get(st.session_state.language, "English")
-    chosen_lang = st.radio("Language", list(lang_map.keys()), index=list(lang_map.keys()).index(current_lang_label), key="lang_radio")
-    if lang_map[chosen_lang] != st.session_state.language:
-        st.session_state.language = lang_map[chosen_lang]
-    
-    op_labels = {"Groq": "groq", "Celeris": "celeris"}
-    rev_op = {v: k for k, v in op_labels.items()}
-    current_op_label = rev_op.get(st.session_state.operator, "Groq")
-    chosen_op = st.radio("Operator", list(op_labels.keys()), index=list(op_labels.keys()).index(current_op_label), key="op_radio",
-                         captions=["Strong coding/math. Fast responses.", "Fastest model. Skills unknown."])
-    if op_labels[chosen_op] != st.session_state.operator:
-        st.session_state.operator = op_labels[chosen_op]
-    
-    if st.button("Delete All Chats", type="secondary"):
-        delete_all_chats(active_email)
-        nc = str(uuid.uuid4())[:8]
-        save_chat(active_email, nc, "New Chat", [])
-        chats.clear()
-        chats[nc] = {"name": "New Chat", "messages": [], "created": datetime.now().isoformat()}
-        st.session_state.current_chat_id = nc
-        st.rerun()
-    
-    st.divider()
-    st.caption("Strafe is a project made for your use. No data can be seen by anyone, even by the owner.")
+    if not st.session_state.logged_in:
+        st.divider()
+        st.caption("Guest mode. Login via ⚙︎ to save chats.")
 
 KEYS = [st.secrets.get(f"GROQ_API_KEY_{i}") for i in range(1, 7)]
 KEYS = [k for k in KEYS if k]
@@ -421,8 +445,9 @@ def call_groq_with_retry(kwargs):
             if "429" in err_str or "401" in err_str:
                 mark_key_failed(key)
             last_err = err_str[:120]
-    failed_tried = [k for k in KEYS if k in st.session_state.failed_keys]
-    for key in failed_tried:
+    for key in KEYS:
+        if key not in st.session_state.failed_keys:
+            continue
         try:
             return Groq(api_key=key).chat.completions.create(**kwargs), None
         except Exception as e:
