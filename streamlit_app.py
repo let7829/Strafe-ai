@@ -13,9 +13,14 @@ MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 PLUS_GLYPH = "\uff0b"
 
-INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div>'
+INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
+#atts{display:flex;gap:8px;width:100%;max-width:760px;flex-wrap:wrap;padding-left:4px;box-sizing:border-box;}
+#atts:empty{display:none;}
+.att{position:relative;width:56px;height:56px;border-radius:12px;overflow:hidden;border:1px solid #2a2a2a;flex-shrink:0;}
+.att img{width:100%;height:100%;object-fit:cover;display:block;}
+.att-x{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(0,0,0,0.75);color:#fff;font-size:0.65rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
 #tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
 .tool-btn{height:32px;border-radius:16px;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:0.85rem;cursor:pointer;display:flex;align-items:center;gap:6px;padding:0 12px;transition:all 0.2s;font-family:'Space Grotesk',sans-serif;}
 .tool-btn .icon{font-size:1rem;line-height:1;}
@@ -29,7 +34,7 @@ INPUT_CSS = """
 .icon-btn:hover{color:#fff;}
 #sb{width:38px;height:38px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 #sb:hover{background:#2563eb;}
-#menu{display:flex;gap:8px;width:100%;max-width:760px;justify-content:center;overflow:hidden;max-height:0;opacity:0;transition:max-height 0.25s ease,opacity 0.2s ease;}
+#menu{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;overflow:hidden;max-height:0;opacity:0;transition:max-height 0.25s ease,opacity 0.2s ease;}
 #menu.open{max-height:60px;opacity:1;}
 .menu-btn{height:40px;border-radius:14px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;padding:0 18px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;white-space:nowrap;}
 .menu-btn:hover{border-color:#4f8dff;color:#fff;}
@@ -41,20 +46,51 @@ export default function(component){
     const btn=parentElement.querySelector('#sb');
     const plusBtn=parentElement.querySelector('#pb');
     const menu=parentElement.querySelector('#menu');
+    const atts=parentElement.querySelector('#atts');
+    const photoBtn=parentElement.querySelector('#mb-photo');
     const btnSearch=parentElement.querySelector('#btn-search');
     const btnThink=parentElement.querySelector('#btn-think');
     if(!input||!btn)return;
     let searchActive=false;
     let thinkActive=false;
+    let attachments=[];
+    const fileInput=document.createElement('input');
+    fileInput.type='file';
+    fileInput.accept='image/*';
+    fileInput.style.display='none';
+    parentElement.appendChild(fileInput);
+    function renderAtts(){
+        atts.innerHTML='';
+        attachments.forEach(function(item,idx){
+            const wrap=document.createElement('div');
+            wrap.className='att';
+            const img=document.createElement('img');
+            img.src=item;
+            const x=document.createElement('button');
+            x.type='button';
+            x.className='att-x';
+            x.textContent='\\u2715';
+            x.onclick=function(ev){
+                ev.stopPropagation();
+                attachments.splice(idx,1);
+                renderAtts();
+            };
+            wrap.appendChild(img);
+            wrap.appendChild(x);
+            atts.appendChild(wrap);
+        });
+    }
     function updateLabels(){
         btnSearch.querySelector('.label').textContent=searchActive?'Searching':'Search';
         btnThink.querySelector('.label').textContent=thinkActive?'Thinking':'Think';
     }
     function send(){
         const val=input.value.trim();
-        if(!val)return;
-        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive});
+        if(!val&&!attachments.length)return;
+        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:attachments.slice()});
         input.value='';
+        attachments=[];
+        renderAtts();
     }
     btn.onclick=send;
     input.onkeydown=function(e){if(e.key==='Enter')send();};
@@ -62,7 +98,7 @@ export default function(component){
         plusBtn.onclick=function(){
             menu.classList.toggle('open');
         };
-        const actions={'mb-photo':'photo','mb-camera':'camera','mb-file':'file'};
+        const actions={'mb-camera':'camera','mb-file':'file'};
         Object.keys(actions).forEach(function(id){
             const b=parentElement.querySelector('#'+id);
             if(b){
@@ -73,6 +109,23 @@ export default function(component){
             }
         });
     }
+    if(photoBtn){
+        photoBtn.onclick=function(){
+            menu.classList.remove('open');
+            fileInput.click();
+        };
+    }
+    fileInput.onchange=function(){
+        const f=fileInput.files[0];
+        if(!f)return;
+        const reader=new FileReader();
+        reader.onload=function(){
+            attachments.push(reader.result);
+            renderAtts();
+        };
+        reader.readAsDataURL(f);
+        fileInput.value='';
+    };
     btnSearch.onclick=function(){
         searchActive=!searchActive;
         this.classList.toggle('active',searchActive);
@@ -121,6 +174,7 @@ div[data-testid='stHorizontalBlock'] > div:nth-child(2) div[data-testid='stPopov
 .brand{text-align:center;padding:8px 0 2px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .user-bubble{display:flex;justify-content:flex-end;width:100%;margin:10px 0 0 0;}
 .user-bubble-inner{background:#5c5c5c;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
+.chat-thumb{width:64px;height:64px;object-fit:cover;border-radius:12px;margin:0 8px 6px 0;vertical-align:middle;border:1px solid #2a2a2a;}
 div[data-testid='stPopover']{margin:0 !important;max-width:100% !important;}
 div[data-testid='stPopover'] button{height:20px !important;min-height:0 !important;padding:0 4px !important;font-size:1rem !important;line-height:1 !important;color:#7a7a7a !important;background:transparent !important;border:none !important;box-shadow:none !important;}
 div[data-testid='stPopover'] button:hover{color:#fff !important;}
@@ -145,6 +199,7 @@ if not KEYS:
     st.stop()
 
 PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+VISION_PREFERRED = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct", "llama-3.2-90b-vision-instruct", "llama-3.2-11b-vision-instruct"]
 SYSTEM = (
     "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\n"
     "I match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\n"
@@ -154,29 +209,36 @@ SYSTEM = (
 )
 SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 
-def pick_model():
-    if "model" in st.session_state:
-        return st.session_state.model
+def pick_model(vision=False):
+    cache_key = "model_vision" if vision else "model"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
     try:
         response = Groq(api_key=KEYS[0]).models.list()
         avail = {m.id if hasattr(m, 'id') else m[0] for m in response.data}
     except Exception:
         avail = set()
-    for p in PREFERRED:
+    pref = VISION_PREFERRED if vision else PREFERRED
+    for p in pref:
         if p in avail:
-            st.session_state.model = p
+            st.session_state[cache_key] = p
             return p
+    if vision:
+        vavail = [a for a in avail if "vision" in a.lower() or "llama-4" in a.lower()]
+        if vavail:
+            st.session_state[cache_key] = vavail[0]
+            return vavail[0]
     safe_avail = avail & SAFE_MODELS
     if safe_avail:
         chosen = list(safe_avail)[0]
-        st.session_state.model = chosen
+        st.session_state[cache_key] = chosen
         return chosen
     if avail:
         chosen = list(avail)[0]
-        st.session_state.model = chosen
+        st.session_state[cache_key] = chosen
         return chosen
-    st.session_state.model = PREFERRED[0]
-    return PREFERRED[0]
+    st.session_state[cache_key] = pref[0]
+    return pref[0]
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -213,15 +275,25 @@ def web_search(query, num_results=3):
     except Exception as e:
         return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. Tell the user."}]
 
-def build_payload(history):
-    model = pick_model()
+def msg_to_api(m):
+    imgs = m.get("images") or []
+    if imgs:
+        parts = [{"type": "text", "text": m["content"]}]
+        for u in imgs:
+            parts.append({"type": "image_url", "image_url": {"url": u}})
+        return {"role": m["role"], "content": parts}
+    return {"role": m["role"], "content": m["content"]}
+
+def build_payload(history, vision=False):
+    model = pick_model(vision)
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
-    if "qwen" in model.lower():
-        kw["reasoning_format"] = "parsed"
-    elif "gpt-oss" in model.lower():
-        kw["reasoning_effort"] = "medium"
-        kw["reasoning_format"] = "parsed"
+    if not vision:
+        if "qwen" in model.lower():
+            kw["reasoning_format"] = "parsed"
+        elif "gpt-oss" in model.lower():
+            kw["reasoning_effort"] = "medium"
+            kw["reasoning_format"] = "parsed"
     return kw
 
 def call_groq_with_retry(kwargs):
@@ -236,6 +308,7 @@ def call_groq_with_retry(kwargs):
             return Groq(api_key=key).chat.completions.create(**kwargs), None
         except NotFoundError:
             st.session_state.pop("model", None)
+            st.session_state.pop("model_vision", None)
             mark_key_failed(key)
             last_err = "model gone"
             continue
@@ -249,10 +322,9 @@ def call_groq_with_retry(kwargs):
 
 def ask(use_search=False, use_think=False, look_back=False):
     t0 = time.time()
-    if look_back:
-        history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-    else:
-        history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages[-15:]]
+    slice_msgs = st.session_state.messages if look_back else st.session_state.messages[-15:]
+    vision = any(m.get("images") for m in slice_msgs)
+    history = [msg_to_api(m) for m in slice_msgs]
 
     tools = None
     if use_search:
@@ -279,7 +351,7 @@ def ask(use_search=False, use_think=False, look_back=False):
     last_err = None
 
     for round_idx in range(max_rounds):
-        kwargs = build_payload(history)
+        kwargs = build_payload(history, vision)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "required" if round_idx == 0 and tool_calls_made == 0 else "auto"
@@ -362,8 +434,9 @@ if pending is not None:
     text = pending.get("text", "") if isinstance(pending, dict) else pending
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
+    images = pending.get("images", []) if isinstance(pending, dict) else []
     is_look_back = text.strip().lower() == "look_back"
-    st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
+    st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "images": images})
     try:
         result = ask(use_search=use_search, use_think=use_think, look_back=is_look_back)
         st.session_state.messages.append({"role": "assistant", **result})
@@ -383,7 +456,7 @@ for i, m in enumerate(st.session_state.messages):
             with sc:
                 if st.button("Save", key=f"sv{i}"):
                     st.session_state.messages = st.session_state.messages[:i]
-                    st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False)}
+                    st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False), "images": m.get("images", [])}
                     st.rerun()
             with sk:
                 if st.button("Cancel", key=f"cx{i}"):
@@ -391,7 +464,8 @@ for i, m in enumerate(st.session_state.messages):
                     st.rerun()
         else:
             safe = H.escape(m["content"]).replace("\n", "<br>")
-            st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{safe}</div></div>')
+            thumbs = "".join(f'<img class="chat-thumb" src="{u}"/>' for u in (m.get("images") or []))
+            st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{thumbs}{safe}</div></div>')
             _sp, _mn = st.columns([5, 1])
             with _mn:
                 with st.popover(MENU_GLYPH, key=f"mu{i}"):
