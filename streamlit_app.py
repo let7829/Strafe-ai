@@ -87,10 +87,7 @@ div[data-testid='stHorizontalBlock'] > div{min-width:0 !important;max-width:100%
 div[data-testid='stHorizontalBlock'] > div:nth-child(1) > div[data-testid='stVerticalBlock']{align-items:flex-start !important;}
 div[data-testid='stHorizontalBlock'] > div:nth-child(2) > div[data-testid='stVerticalBlock']{align-items:flex-end !important;}
 div[data-testid='stHorizontalBlock'] > div:nth-child(2) div[data-testid='stPopoverContent']{left:auto !important;right:0 !important;}
-.brand-row{display:flex;align-items:center;justify-content:center;gap:12px;padding:8px 0 2px 0;}
-.brand{font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
-.clear-btn{background:transparent;border:1px solid #2a2a2a;border-radius:8px;color:#7a7a7a;font-size:0.75rem;padding:4px 10px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;}
-.clear-btn:hover{color:#fff;border-color:#ef4444;}
+.brand{text-align:center;padding:8px 0 2px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .user-bubble{display:flex;justify-content:flex-end;width:100%;margin:10px 0 0 0;}
 .user-bubble-inner{background:#5c5c5c;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
 div[data-testid='stPopover']{margin:0 !important;max-width:100% !important;}
@@ -108,7 +105,7 @@ div[data-testid='stExpander'] .stMarkdown{color:#bdbdbd !important;font-size:0.9
 """
 
 st.html(CSS)
-st.html("<div class='brand-row'><div class='brand'>STRAFE AI</div><button class='clear-btn' onclick='window.parent.postMessage({type:\"streamlit:setComponentValue\",key:\"clear_chat\",value:true},\"*\")'>Clear</button></div>")
+st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
 PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
