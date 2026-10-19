@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
-import random, time, html as H, json
+import random, time, html as H
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
@@ -11,14 +11,14 @@ st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercont
 SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
+SEARCH_GLYPH = "\u2315"
+THINK_GLYPH = "\u269b"
 
-INPUT_HTML = '<div id="bar"><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div></div>'
+INPUT_HTML = '<div id="bar"><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn">' + SEARCH_GLYPH + '</button><button id="btn-think" type="button" class="tool-btn">' + THINK_GLYPH + '</button></div></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
 #tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
-.tool-btn{height:32px;border-radius:16px;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:0.85rem;cursor:pointer;display:flex;align-items:center;gap:6px;padding:0 12px;transition:all 0.2s;font-family:'Space Grotesk',sans-serif;}
-.tool-btn .icon{font-size:1rem;line-height:1;}
-.tool-btn .label{white-space:nowrap;}
+.tool-btn{width:32px;height:32px;border-radius:50%;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s;}
 .tool-btn:hover{color:#fff;border-color:#4f8dff;}
 .tool-btn.active{background:#4f8dff;color:#fff;border-color:#4f8dff;}
 #cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:10px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
@@ -37,10 +37,6 @@ export default function(component){
     if(!input||!btn)return;
     let searchActive=false;
     let thinkActive=false;
-    function updateLabels(){
-        btnSearch.querySelector('.label').textContent=searchActive?'Searching':'Search';
-        btnThink.querySelector('.label').textContent=thinkActive?'Thinking':'Think';
-    }
     function send(){
         const val=input.value.trim();
         if(!val)return;
@@ -52,12 +48,10 @@ export default function(component){
     btnSearch.onclick=function(){
         searchActive=!searchActive;
         this.classList.toggle('active',searchActive);
-        updateLabels();
     };
     btnThink.onclick=function(){
         thinkActive=!thinkActive;
         this.classList.toggle('active',thinkActive);
-        updateLabels();
     };
 }
 """
@@ -77,7 +71,7 @@ html,body,[class*='css'],.stApp,#root,.main,.block-container{font-family:'Space 
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 section.main,section[data-testid='stMain'],[data-testid='stAppViewContainer'],[data-testid='stMainBlockContainer'],[data-testid='stAppView'],[data-testid='stVerticalBlockBorderWrapper']{overflow-x:hidden !important;max-width:100vw !important;width:100% !important;}
 #MainMenu,footer,header{visibility:hidden;}
-section.main .block-container{padding:0 1rem 130px 1rem !important;max-width:760px;overflow-x:hidden;}
+section.main .block-container{padding:0 1rem 160px 1rem !important;max-width:760px;overflow-x:hidden;}
 div[data-testid='stVerticalBlock']{gap:0 !important;max-width:100% !important;}
 div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:8px 0 0 0 !important;margin:0 !important;overflow:visible !important;}
 div[data-testid^='stChatMessageAvatar']{display:none !important;}
@@ -109,16 +103,15 @@ st.html(CSS)
 st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets[f"GROQ_API_KEY_{i}"] for i in range(1, 7)]
-PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy—you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier—I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple.\n\nWhen web_search is available, USE IT. Prefer searching over guessing."
-SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
+PREFERRED = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768"]
+SYSTEM = "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\nI match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\nI hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\nI also don't pretend to be something I'm not. You asked earlier\u2014I gave you the honest answer instead of the corporate \"I'm just a helpful AI\" response.\nYou are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple."
+SAFE_MODELS = {"llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "qwen/qwen3-32b", "qwen/qwen3-8b", "mixtral-8x7b-32768", "gemma2-9b-it"}
 
 def pick_model():
     if "model" in st.session_state:
         return st.session_state.model
     try:
-        response = Groq(api_key=KEYS[0]).models.list()
-        avail = {m.id if hasattr(m, 'id') else m[0] for m in response.data}
+        avail = {m.id for m in Groq(api_key=KEYS[0]).models.list()}
     except Exception:
         avail = set()
     for p in PREFERRED:
@@ -139,20 +132,6 @@ def pick_model():
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-def get_working_key():
-    if "failed_keys" not in st.session_state:
-        st.session_state.failed_keys = set()
-    available = [k for k in KEYS if k not in st.session_state.failed_keys]
-    if not available:
-        st.session_state.failed_keys.clear()
-        available = KEYS
-    return random.choice(available)
-
-def mark_key_failed(key):
-    if "failed_keys" not in st.session_state:
-        st.session_state.failed_keys = set()
-    st.session_state.failed_keys.add(key)
 
 def web_search(query, num_results=3):
     try:
@@ -186,97 +165,79 @@ def web_search(query, num_results=3):
     except Exception as e:
         return [{"title": "Search error", "link": "", "snippet": str(e)}]
 
+def fetch_url(url, max_chars=1500):
+    try:
+        response = requests.get(url, timeout=3, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+        soup = BeautifulSoup(response.text, 'html.parser')
+        for script in soup(["script", "style"]):
+            script.decompose()
+        text = soup.get_text(separator=' ', strip=True)
+        text = ' '.join(text.split())
+        return text[:max_chars]
+    except Exception as e:
+        return f"Could not fetch URL: {e}"
+
 def build_payload(history, model_override=None):
     model = model_override or pick_model()
     msgs = [{"role": "system", "content": SYSTEM}] + history
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
     if "qwen" in model.lower():
-        kw["reasoning_effort"] = "medium"
-        kw["reasoning_format"] = "parsed"
-    elif "gpt-oss" in model.lower():
-        kw["reasoning_effort"] = "medium"
-        kw["reasoning_format"] = "parsed"
+        kw["reasoning_effort"] = "none"
+        kw["reasoning_format"] = "hidden"
     return kw
 
 def ask(use_search=False, use_think=False, search_query=None):
     t0 = time.time()
     last_err = None
     history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-    tool_calls_made = 0
-
-    tools = None
-    if use_search:
-        tools = [{
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Search the web for current information. USE THIS TOOL FREELY for any factual question, recent events, pricing, documentation, code references, product info, news, or anything where accuracy matters. Prefer searching over relying on training data. When in doubt, search.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "The search query to look up"}
-                    },
-                    "required": ["query"]
-                }
-            }
-        }]
-
-    max_rounds = 5 if use_search else 1
-    for _ in range(max_rounds):
-        key = get_working_key()
-        kwargs = build_payload(history)
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+    thinking_text = None
+    if use_search and search_query:
+        search_container = st.empty()
+        search_container.html('<div class="info-line">⌕ <span>searching...</span></div>')
+        results = web_search(search_query)
+        context_parts = []
+        for r in results[:2]:
+            if r["link"]:
+                page_text = fetch_url(r["link"])
+                context_parts.append(f"Source: {r['title']}\n{page_text}")
+        search_context = "\n\n".join(context_parts)
+        history.append({"role": "system", "content": f"Web search results for '{search_query}':\n\n{search_context}\n\nUse this information to answer the user's question."})
+        search_container.empty()
+    total_tokens = 0
+    if use_think:
+        think_container = st.empty()
+        think_container.html('<div class="info-line">⚛︎ <span>thinking...</span></div>')
+        thinking_messages = history.copy()
+        thinking_messages.append({"role": "user", "content": "Think through this step by step. Show your reasoning, notes, and plan clearly. Write your internal thoughts below:"})
         try:
-            r = Groq(api_key=key).chat.completions.create(**kwargs)
+            think_r = Groq(api_key=random.choice(KEYS)).chat.completions.create(model=pick_model(), messages=thinking_messages, max_completion_tokens=600, temperature=0.7)
+            thinking_text = (getattr(think_r.choices[0].message, "content", None) or "").strip()
+            total_tokens += think_r.usage.total_tokens if think_r.usage else 0
+            history.append({"role": "system", "content": f"Internal reasoning: {thinking_text}\n\nNow provide the final polished response based on this reasoning."})
+        except Exception:
+            history.append({"role": "system", "content": "Thinking process failed. Provide a direct answer."})
+        finally:
+            think_container.empty()
+    for _ in range(3):
+        kwargs = build_payload(history)
+        try:
+            r = Groq(api_key=random.choice(KEYS)).chat.completions.create(**kwargs)
         except NotFoundError:
             st.session_state.pop("model", None)
-            mark_key_failed(key)
             last_err = "model gone"
             continue
         except Exception as e:
-            mark_key_failed(key)
             last_err = str(e)[:120]
-            continue
-
-        msg = r.choices[0].message
-        if tools and getattr(msg, "tool_calls", None):
-            tool_calls_made += len(msg.tool_calls)
-            if tool_calls_made > 5:
-                raise RuntimeError("Tool call limit reached: model requested too many searches")
-            assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
-            for tc in msg.tool_calls:
-                assistant_msg["tool_calls"].append({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments}
-                })
-            history.append(assistant_msg)
-            for tc in msg.tool_calls:
-                if tc.function.name == "web_search":
-                    args = json.loads(tc.function.arguments)
-                    results = web_search(args.get("query", ""))
-                    context = "\n".join(f"{r['title']}: {r['snippet']} ({r['link']})" for r in results)
-                    history.append({"role": "tool", "tool_call_id": tc.id, "content": context})
-            continue
-        else:
-            content = (msg.content or "").strip()
-            reasoning = getattr(msg, "reasoning_content", None)
-            secs = max(0.1, time.time() - t0)
-            used = (r.usage.total_tokens if r.usage else 0)
-            tps = round(used / secs, 1) if used else 0
-            return {
-                "content": content,
-                "secs": round(secs, 1),
-                "tok": f"{tps} tok/s",
-                "sent": datetime.now().strftime("%H:%M"),
-                "search": use_search,
-                "think": use_think,
-                "reasoning": reasoning if use_think else None
-            }
-
-    raise RuntimeError(last_err or "All API keys failed")
+            break
+        content = (getattr(r.choices[0].message, "content", None) or "").strip()
+        secs = max(0.1, time.time() - t0)
+        used = (r.usage.total_tokens if r.usage else 0) + total_tokens
+        tps = round(used / secs, 1) if used else 0
+        if thinking_text:
+            with st.expander("⚛︎ thinking process", expanded=False):
+                st.markdown(thinking_text)
+        return content, round(secs, 1), f"{tps} tok/s"
+    raise RuntimeError(last_err or "Groq call failed")
 
 def info_html(m):
     sent = m.get("sent", "?")
@@ -284,9 +245,9 @@ def info_html(m):
     tps = m.get("tok", "?")
     flags = []
     if m.get("search"):
-        flags.append("\u2315")
+        flags.append(SEARCH_GLYPH)
     if m.get("think"):
-        flags.append("\u269b")
+        flags.append(THINK_GLYPH)
     flag_str = " ".join(flags) + " " if flags else ""
     return f'<div class="info-line">{flag_str}sent <span>{sent}</span> &nbsp;\u00b7&nbsp; {secs}s &nbsp;\u00b7&nbsp; {tps}</div>'
 
@@ -296,8 +257,8 @@ if act:
     if kind == "retry" and i > 0 and st.session_state.messages[i - 1]["role"] == "user":
         prev_msg = st.session_state.messages[i - 1]
         st.session_state.messages = st.session_state.messages[:i]
-        result = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False), search_query=prev_msg["content"] if prev_msg.get("search") else None)
-        st.session_state.messages.append({"role": "assistant", **result})
+        c, s, t = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False), search_query=prev_msg["content"] if prev_msg.get("search") else None)
+        st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": prev_msg.get("search", False), "think": prev_msg.get("think", False)})
         st.session_state["show"] = None
     elif kind == "info":
         cur = st.session_state.get("show")
@@ -314,8 +275,8 @@ if pending is not None:
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
-    result = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None)
-    st.session_state.messages.append({"role": "assistant", **result})
+    c, s, t = ask(use_search=use_search, use_think=use_think, search_query=text if use_search else None)
+    st.session_state.messages.append({"role": "assistant", "content": c, "secs": s, "tok": t, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think})
     st.session_state["editing"] = None
     st.rerun()
 
@@ -354,11 +315,6 @@ for i, m in enumerate(st.session_state.messages):
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
     else:
-        reasoning = m.get("reasoning")
-        if reasoning:
-            think_secs = m.get("secs", "?")
-            with st.expander(f"\u269b Thought for {think_secs}s", expanded=False):
-                st.markdown(reasoning)
         with st.chat_message("assistant"):
             st.markdown(m["content"])
         _mn, _sp = st.columns([1, 3])
