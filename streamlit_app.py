@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
-import random, time, html as H, json
+import random, time, html as H, json, hashlib, uuid
 from datetime import datetime
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException
@@ -12,10 +12,8 @@ SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 PLUS_GLYPH = "\uff0b"
-HAMBURGER_GLYPH = "\uff1d"
-SETTINGS_GLYPH = "\u2699"
 
-INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div><button id="side-menu-btn" type="button">' + HAMBURGER_GLYPH + '</button><button id="settings-btn" type="button">' + SETTINGS_GLYPH + '</button><div id="side-menu"><div id="sm-header"><div id="sm-user"><span id="sm-user-name">Guest</span><span id="sm-user-email">@no_email.gmail.com</span></div><button id="sm-close" type="button">\u2715</button></div><button id="sm-new-chat" type="button">New Chat</button><div id="sm-chats"></div></div><div id="settings-overlay"><div id="settings-header"><span>Settings</span><button id="settings-close" type="button">\u2715</button></div><div id="settings-tabs"><button class="settings-tab active" data-tab="account">Account</button><button class="settings-tab" data-tab="language">Language</button><button class="settings-tab" data-tab="models">Models</button><button class="settings-tab" data-tab="about">About</button></div><div id="settings-content"><div class="settings-panel active" data-panel="account"><button id="settings-logout">Log Out</button><button id="settings-delete-all">Delete All Chats</button></div><div class="settings-panel" data-panel="language"><label class="settings-radio"><input type="radio" name="lang" value="en" checked><span>English</span></label><label class="settings-radio"><input type="radio" name="lang" value="ru"><span>Russian</span></label><label class="settings-radio"><input type="radio" name="lang" value="uk"><span>Ukrainian</span></label></div><div class="settings-panel" data-panel="models"><div class="model-option"><label class="settings-radio"><input type="radio" name="provider" value="groq" checked><span>Groq</span></label><p class="model-desc">Groq has strong coding/math skills. Also known for fast responses.</p></div><div class="model-option"><label class="settings-radio"><input type="radio" name="provider" value="celeris"><span>Celeris</span></label><p class="model-desc">Celeris is considered to be fastest model, outrun Groq. The skills are currently unknown.</p></div></div><div class="settings-panel" data-panel="about"><p>Strafe is a project made for your use. No data can be seen by anyone, even by the owner.</p></div></div></div><div id="confirm-overlay"><div id="confirm-box"><p id="confirm-text"></p><div id="confirm-buttons"><button id="confirm-yes">Yes</button><button id="confirm-no">No</button></div></div></div><div id="login-overlay"><div id="login-box"><input id="login-email" type="email" placeholder="Enter your email"><button id="login-submit">Login</button><button id="login-cancel">Cancel</button></div></div>'
+INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
 INPUT_CSS = """
 #bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
 #atts{display:flex;gap:8px;width:100%;max-width:760px;flex-wrap:wrap;padding-left:4px;box-sizing:border-box;}
@@ -49,65 +47,6 @@ INPUT_CSS = """
 #cam-close{position:absolute;top:16px;right:16px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);color:#fff;font-size:1.4rem;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:10000001;}
 #cam-capture{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:#fff;margin-bottom:40px;z-index:10000001;cursor:pointer;flex-shrink:0;}
 #cam-capture:active{transform:scale(0.9);}
-#side-menu-btn{position:fixed;top:16px;left:16px;width:40px;height:40px;border-radius:50%;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:999998;transition:all 0.2s;}
-#side-menu-btn:hover{color:#fff;border-color:#4f8dff;}
-#settings-btn{position:fixed;bottom:16px;right:16px;width:40px;height:40px;border-radius:50%;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:999998;transition:all 0.2s;}
-#settings-btn:hover{color:#fff;border-color:#4f8dff;}
-#side-menu{position:fixed;top:0;left:-300px;width:300px;height:100vh;background:#0a0a0a;border-right:1px solid #2a2a2a;z-index:9999999;display:flex;flex-direction:column;transition:left 0.3s ease;padding:16px;box-sizing:border-box;}
-#side-menu.open{left:0;}
-#sm-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;}
-#sm-user{display:flex;flex-direction:column;gap:4px;}
-#sm-user-name{color:#fff;font-size:1.1rem;font-weight:600;font-family:'Space Grotesk',sans-serif;}
-#sm-user-email{color:#7a7a7a;font-size:0.8rem;font-family:'Space Grotesk',sans-serif;cursor:pointer;}
-#sm-user-email:hover{color:#4f8dff;}
-#sm-close{width:32px;height:32px;border-radius:50%;border:1px solid #2a2a2a;background:transparent;color:#7a7a7a;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;}
-#sm-close:hover{color:#fff;border-color:#4f8dff;}
-#sm-new-chat{width:100%;height:44px;border-radius:12px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.95rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;margin-bottom:16px;transition:all 0.2s;}
-#sm-new-chat:hover{border-color:#4f8dff;color:#fff;}
-#sm-chats{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;}
-.sm-chat{display:flex;align-items:center;gap:8px;padding:12px;border-radius:10px;background:#1a1a1a;cursor:pointer;transition:all 0.2s;}
-.sm-chat:hover{background:#2a2a2a;}
-.sm-chat.active{background:#2563eb33;border:1px solid #4f8dff;}
-.sm-chat-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#ececec;font-size:0.9rem;font-family:'Space Grotesk',sans-serif;}
-.sm-chat-del{width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:#7a7a7a;font-size:0.8rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-.sm-chat-del:hover{color:#ef4444;background:rgba(239,68,68,0.1);}
-#settings-overlay{display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.8);z-index:9999999;align-items:center;justify-content:center;}
-#settings-overlay.active{display:flex;}
-#settings-header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #2a2a2a;}
-#settings-header span{color:#fff;font-size:1.2rem;font-weight:600;font-family:'Space Grotesk',sans-serif;}
-#settings-close{width:32px;height:32px;border-radius:50%;border:1px solid #2a2a2a;background:transparent;color:#7a7a7a;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;}
-#settings-close:hover{color:#fff;border-color:#4f8dff;}
-#settings-tabs{display:flex;gap:4px;padding:12px 20px;border-bottom:1px solid #2a2a2a;overflow-x:auto;}
-.settings-tab{padding:8px 16px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#7a7a7a;font-size:0.85rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;white-space:nowrap;transition:all 0.2s;}
-.settings-tab:hover{color:#fff;border-color:#4f8dff;}
-.settings-tab.active{background:#4f8dff;color:#fff;border-color:#4f8dff;}
-#settings-content{padding:20px;overflow-y:auto;flex:1;}
-.settings-panel{display:none;}
-.settings-panel.active{display:flex;flex-direction:column;gap:12px;}
-.settings-panel button{width:100%;height:44px;border-radius:12px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.95rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;}
-.settings-panel button:hover{border-color:#4f8dff;color:#fff;}
-.settings-radio{display:flex;align-items:center;gap:10px;padding:12px;border-radius:10px;background:#1a1a1a;cursor:pointer;transition:all 0.2s;}
-.settings-radio:hover{background:#2a2a2a;}
-.settings-radio input[type="radio"]{width:18px;height:18px;cursor:pointer;}
-.settings-radio span{color:#ececec;font-size:0.95rem;font-family:'Space Grotesk',sans-serif;}
-.model-option{display:flex;flex-direction:column;gap:8px;}
-.model-desc{color:#7a7a7a;font-size:0.8rem;font-family:'Space Grotesk',sans-serif;margin:0;padding-left:28px;}
-#confirm-overlay{display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);z-index:10000002;align-items:center;justify-content:center;}
-#confirm-overlay.active{display:flex;}
-#confirm-box{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:320px;display:flex;flex-direction:column;gap:16px;}
-#confirm-text{color:#ececec;font-size:1rem;font-family:'Space Grotesk',sans-serif;margin:0;text-align:center;}
-#confirm-buttons{display:flex;gap:12px;}
-#confirm-buttons button{flex:1;height:40px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;}
-#confirm-yes:hover{background:#ef4444;border-color:#ef4444;color:#fff;}
-#confirm-no:hover{border-color:#4f8dff;color:#fff;}
-#login-overlay{display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);z-index:10000002;align-items:center;justify-content:center;}
-#login-overlay.active{display:flex;}
-#login-box{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:320px;display:flex;flex-direction:column;gap:12px;}
-#login-email{width:100%;height:44px;border-radius:10px;border:1px solid #2a2a2a;background:#0a0a0a;color:#fff;font-size:0.95rem;padding:0 14px;box-sizing:border-box;font-family:'Space Grotesk',sans-serif;}
-#login-email:focus{outline:none;border-color:#4f8dff;}
-#login-box button{width:100%;height:40px;border-radius:10px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;}
-#login-submit:hover{background:#4f8dff;border-color:#4f8dff;color:#fff;}
-#login-cancel:hover{border-color:#7a7a7a;color:#fff;}
 """
 INPUT_JS = """
 export default function(component){
@@ -127,38 +66,12 @@ export default function(component){
     const camClose=parentElement.querySelector('#cam-close');
     const camCapture=parentElement.querySelector('#cam-capture');
     const camCanvas=parentElement.querySelector('#cam-canvas');
-    const sideMenuBtn=parentElement.querySelector('#side-menu-btn');
-    const sideMenu=parentElement.querySelector('#side-menu');
-    const smClose=parentElement.querySelector('#sm-close');
-    const smNewChat=parentElement.querySelector('#sm-new-chat');
-    const smChats=parentElement.querySelector('#sm-chats');
-    const smUserEmail=parentElement.querySelector('#sm-user-email');
-    const smUserName=parentElement.querySelector('#sm-user-name');
-    const settingsBtn=parentElement.querySelector('#settings-btn');
-    const settingsOverlay=parentElement.querySelector('#settings-overlay');
-    const settingsClose=parentElement.querySelector('#settings-close');
-    const settingsTabs=parentElement.querySelectorAll('.settings-tab');
-    const settingsPanels=parentElement.querySelectorAll('.settings-panel');
-    const settingsLogout=parentElement.querySelector('#settings-logout');
-    const settingsDeleteAll=parentElement.querySelector('#settings-delete-all');
-    const confirmOverlay=parentElement.querySelector('#confirm-overlay');
-    const confirmText=parentElement.querySelector('#confirm-text');
-    const confirmYes=parentElement.querySelector('#confirm-yes');
-    const confirmNo=parentElement.querySelector('#confirm-no');
-    const loginOverlay=parentElement.querySelector('#login-overlay');
-    const loginEmail=parentElement.querySelector('#login-email');
-    const loginSubmit=parentElement.querySelector('#login-submit');
-    const loginCancel=parentElement.querySelector('#login-cancel');
     if(!input||!btn)return;
     let searchActive=false;
     let thinkActive=false;
     let attachments=[];
     let fileAttachments=[];
     let camStream=null;
-    let chats=JSON.parse(localStorage.getItem('strafe_chats')||'[]');
-    let currentChatId=localStorage.getItem('strafe_current_chat')||null;
-    let userEmail=localStorage.getItem('strafe_user_email')||'';
-    let settings={lang:localStorage.getItem('strafe_lang')||'en',provider:localStorage.getItem('strafe_provider')||'groq'};
     const TEXT_EXTS=['txt','md','csv','json','py','js','ts','jsx','tsx','html','css','xml','yaml','yml','toml','ini','cfg','conf','log','sh','bash','zsh','sql','r','rb','go','rs','c','cpp','h','hpp','java','kt','swift','php','pl','lua','asm','s','makefile','dockerfile','env','gitignore','editorconfig'];
     const imageInput=document.createElement('input');
     imageInput.type='file';
@@ -170,67 +83,6 @@ export default function(component){
     fileInput.accept='.txt,.md,.csv,.json,.py,.js,.ts,.jsx,.tsx,.html,.css,.xml,.yaml,.yml,.toml,.ini,.cfg,.conf,.log,.sh,.bash,.zsh,.sql,.r,.rb,.go,.rs,.c,.cpp,.h,.hpp,.java,.kt,.swift,.php,.pl,.lua,.asm,.s,.makefile,.dockerfile,.env,.gitignore,.editorconfig,text/*';
     fileInput.style.display='none';
     parentElement.appendChild(fileInput);
-    function saveChats(){
-        localStorage.setItem('strafe_chats',JSON.stringify(chats));
-        localStorage.setItem('strafe_current_chat',currentChatId||'');
-    }
-    function renderChatList(){
-        smChats.innerHTML='';
-        chats.forEach(function(chat){
-            const div=document.createElement('div');
-            div.className='sm-chat'+(chat.id===currentChatId?' active':'');
-            const name=document.createElement('span');
-            name.className='sm-chat-name';
-            name.textContent=chat.name;
-            const del=document.createElement('button');
-            del.type='button';
-            del.className='sm-chat-del';
-            del.textContent='\\u2715';
-            del.onclick=function(ev){
-                ev.stopPropagation();
-                showConfirm('Delete this chat?',function(){
-                    chats=chats.filter(function(c){return c.id!==chat.id;});
-                    if(currentChatId===chat.id)currentChatId=null;
-                    saveChats();
-                    renderChatList();
-                    setTriggerValue('chat_action',{action:'delete',id:chat.id});
-                });
-            };
-            div.onclick=function(){
-                currentChatId=chat.id;
-                saveChats();
-                renderChatList();
-                setTriggerValue('chat_action',{action:'load',id:chat.id});
-                closeSideMenu();
-            };
-            div.appendChild(name);
-            div.appendChild(del);
-            smChats.appendChild(div);
-        });
-    }
-    function updateUserDisplay(){
-        if(userEmail){
-            smUserName.textContent=userEmail.split('@')[0];
-            smUserEmail.textContent=userEmail;
-        }else{
-            smUserName.textContent='Guest';
-            smUserEmail.textContent='@no_email.gmail.com';
-        }
-    }
-    function showConfirm(text,onYes){
-        confirmText.textContent=text;
-        confirmOverlay.classList.add('active');
-        confirmYes.onclick=function(){
-            confirmOverlay.classList.remove('active');
-            onYes();
-        };
-        confirmNo.onclick=function(){
-            confirmOverlay.classList.remove('active');
-        };
-    }
-    function closeSideMenu(){
-        sideMenu.classList.remove('open');
-    }
     function resizeImage(dataUrl,maxSize){
         return new Promise(function(resolve){
             const img=new Image();
@@ -327,7 +179,7 @@ export default function(component){
         for(let i=0;i<attachments.length;i++){
             resized.push(await resizeImage(attachments[i],1024));
         }
-        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:resized,files:fileAttachments.slice(),chatId:currentChatId});
+        setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:resized,files:fileAttachments.slice()});
         input.value='';
         attachments=[];
         fileAttachments=[];
@@ -404,96 +256,490 @@ export default function(component){
         this.classList.toggle('active',thinkActive);
         updateLabels();
     };
-    sideMenuBtn.onclick=function(){
-        sideMenu.classList.toggle('open');
-        renderChatList();
-    };
-    smClose.onclick=closeSideMenu;
-    smNewChat.onclick=function(){
-        const id='chat_'+Date.now();
-        chats.unshift({id:id,name:'New Chat',messages:[]});
-        currentChatId=id;
-        saveChats();
-        renderChatList();
-        setTriggerValue('chat_action',{action:'new',id:id});
-        closeSideMenu();
-    };
-    smUserEmail.onclick=function(){
-        if(!userEmail){
-            loginOverlay.classList.add('active');
-            loginEmail.value='';
-            loginEmail.focus();
-        }
-    };
-    settingsBtn.onclick=function(){
-        settingsOverlay.classList.add('active');
-        parentElement.querySelectorAll('input[name="lang"]').forEach(function(r){
-            r.checked=r.value===settings.lang;
-        });
-        parentElement.querySelectorAll('input[name="provider"]').forEach(function(r){
-            r.checked=r.value===settings.provider;
-        });
-    };
-    settingsClose.onclick=function(){
-        settingsOverlay.classList.remove('active');
-    };
-    settingsTabs.forEach(function(tab){
-        tab.onclick=function(){
-            settingsTabs.forEach(function(t){t.classList.remove('active');});
-            settingsPanels.forEach(function(p){p.classList.remove('active');});
-            tab.classList.add('active');
-            parentElement.querySelector('.settings-panel[data-panel="'+tab.dataset.tab+'"]').classList.add('active');
-        };
-    });
-    settingsLogout.onclick=function(){
-        showConfirm('Log out?',function(){
-            userEmail='';
-            localStorage.removeItem('strafe_user_email');
-            updateUserDisplay();
-        });
-    };
-    settingsDeleteAll.onclick=function(){
-        showConfirm('Delete all chats?',function(){
-            chats=[];
-            currentChatId=null;
-            saveChats();
-            renderChatList();
-            setTriggerValue('chat_action',{action:'delete_all'});
-        });
-    };
-    parentElement.querySelectorAll('input[name="lang"]').forEach(function(radio){
-        radio.onchange=function(){
-            settings.lang=this.value;
-            localStorage.setItem('strafe_lang',this.value);
-            setTriggerValue('settings_change',{lang:settings.lang,provider:settings.provider});
-        };
-    });
-    parentElement.querySelectorAll('input[name="provider"]').forEach(function(radio){
-        radio.onchange=function(){
-            settings.provider=this.value;
-            localStorage.setItem('strafe_provider',this.value);
-            setTriggerValue('settings_change',{lang:settings.lang,provider:settings.provider});
-        };
-    });
-    loginSubmit.onclick=function(){
-        const email=loginEmail.value.trim();
-        if(email&&email.includes('@')){
-            userEmail=email;
-            localStorage.setItem('strafe_user_email',email);
-            updateUserDisplay();
-            loginOverlay.classList.remove('active');
-            setTriggerValue('login',email);
-        }
-    };
-    loginCancel.onclick=function(){
-        loginOverlay.classList.remove('active');
-    };
-    updateUserDisplay();
-    renderChatList();
 }
 """
 
 chat_input = components.component("strafe_chat_input", html=INPUT_HTML, css=INPUT_CSS, js=INPUT_JS)
+
+UI_CSS = """
+#topbar{position:fixed;top:0;left:0;right:0;height:56px;padding:0 14px;display:flex;align-items:center;gap:10px;z-index:999998;background:linear-gradient(to bottom,rgba(10,10,10,0.96),rgba(10,10,10,0));pointer-events:none;font-family:'Space Grotesk',sans-serif;}
+#topbar > *{pointer-events:auto;}
+.tb-btn{height:36px;min-width:36px;border-radius:18px;border:1px solid #2a2a2a;background:#1a1a1a;color:#bdbdbd;font-size:0.9rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;padding:0 14px;display:flex;align-items:center;justify-content:center;gap:6px;transition:all 0.2s;box-shadow:0 2px 10px rgba(0,0,0,0.4);}
+.tb-btn:hover{color:#fff;border-color:#4f8dff;}
+#menu-btn{font-size:1.15rem;padding:0;width:36px;}
+#account-btn{font-size:0.82rem;color:#8a8a8a;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#account-btn:hover{color:#fff;}
+#sidebar-backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.55);z-index:1000000;opacity:0;pointer-events:none;transition:opacity 0.2s;}
+#sidebar-backdrop.open{opacity:1;pointer-events:auto;}
+#sidebar{position:fixed;top:0;left:0;width:300px;max-width:86vw;height:100vh;background:#101010;border-right:1px solid #2a2a2a;z-index:1000001;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform 0.25s ease;font-family:'Space Grotesk',sans-serif;}
+#sidebar.open{transform:translateX(0);}
+.sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #1f1f1f;}
+.sidebar-title{font-size:0.78rem;color:#8a8a8a;font-weight:700;letter-spacing:2px;}
+.icon-x{width:30px;height:30px;border-radius:50%;border:none;background:transparent;color:#8a8a8a;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;transition:all 0.15s;}
+.icon-x:hover{color:#fff;background:#222;}
+#new-chat-btn{margin:12px 14px;height:42px;border-radius:10px;border:1px dashed #3a3a3a;background:transparent;color:#bdbdbd;font-size:0.9rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:6px;}
+#new-chat-btn:hover{background:#1a1a1a;color:#fff;border-color:#4f8dff;}
+#chat-list{flex:1;overflow-y:auto;padding:0 8px 16px 8px;}
+#chat-list::-webkit-scrollbar{width:6px;}
+#chat-list::-webkit-scrollbar-thumb{background:#2a2a2a;border-radius:3px;}
+.chat-item{display:flex;align-items:center;gap:6px;padding:10px 12px;border-radius:8px;cursor:pointer;color:#bdbdbd;font-size:0.88rem;transition:background 0.15s;margin-bottom:2px;}
+.chat-item:hover{background:#1a1a1a;color:#fff;}
+.chat-item.active{background:#1a2030;color:#fff;border-left:2px solid #4f8dff;padding-left:10px;}
+.chat-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.chat-del{width:22px;height:22px;border-radius:50%;border:none;background:transparent;color:#5a5a5a;font-size:0.72rem;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;transition:all 0.15s;}
+.chat-del:hover{color:#ff5555;background:#2a1a1a;}
+.empty-chats{padding:24px 16px;color:#4a4a4a;font-size:0.84rem;text-align:center;line-height:1.5;}
+#settings-btn{position:fixed;bottom:140px;right:20px;width:48px;height:48px;border-radius:50%;border:1px solid #2a2a2a;background:#1a1a1a;color:#bdbdbd;font-size:1.15rem;cursor:pointer;z-index:999997;display:flex;align-items:center;justify-content:center;transition:all 0.2s;box-shadow:0 4px 20px rgba(0,0,0,0.5);font-family:'Space Grotesk',sans-serif;}
+#settings-btn:hover{color:#fff;border-color:#4f8dff;transform:rotate(45deg);}
+#settings-backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.55);z-index:1000002;opacity:0;pointer-events:none;transition:opacity 0.2s;}
+#settings-backdrop.open{opacity:1;pointer-events:auto;}
+#settings-panel{position:fixed;top:0;right:0;width:400px;max-width:92vw;height:100vh;background:#101010;border-left:1px solid #2a2a2a;z-index:1000003;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.25s ease;font-family:'Space Grotesk',sans-serif;}
+#settings-panel.open{transform:translateX(0);}
+.settings-header{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #1f1f1f;flex-shrink:0;}
+.settings-title{font-size:1.02rem;color:#fff;font-weight:600;}
+.tabs{display:flex;gap:2px;padding:10px 12px;overflow-x:auto;border-bottom:1px solid #1a1a1a;flex-shrink:0;}
+.tabs::-webkit-scrollbar{height:0;}
+.tab{flex-shrink:0;height:32px;padding:0 14px;border-radius:16px;border:none;background:transparent;color:#8a8a8a;font-size:0.82rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;white-space:nowrap;}
+.tab:hover{color:#fff;}
+.tab.active{background:#4f8dff;color:#fff;}
+.tab-content{display:none;padding:16px 18px;overflow-y:auto;flex:1;}
+.tab-content.active{display:block;}
+.tab-content::-webkit-scrollbar{width:6px;}
+.tab-content::-webkit-scrollbar-thumb{background:#2a2a2a;border-radius:3px;}
+.setting-section{margin-bottom:20px;}
+.setting-label{font-size:0.72rem;text-transform:uppercase;letter-spacing:1.5px;color:#6a6a6a;margin-bottom:10px;font-weight:700;}
+.setting-btn{width:100%;height:42px;border-radius:10px;border:1px solid #2a2a2a;background:#181818;color:#ececec;font-size:0.9rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;margin-bottom:8px;text-align:left;padding:0 14px;transition:all 0.2s;display:flex;align-items:center;justify-content:space-between;}
+.setting-btn:hover{background:#222;border-color:#4f8dff;}
+.setting-btn.danger{color:#ff6b6b;}
+.setting-btn.danger:hover{background:#2a1a1a;border-color:#ff5555;}
+.radio-item{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border-radius:10px;border:1px solid #2a2a2a;background:#141414;margin-bottom:8px;cursor:pointer;transition:all 0.2s;}
+.radio-item:hover{border-color:#3a3a3a;}
+.radio-item.selected{border-color:#4f8dff;background:#161d2b;}
+.radio-dot{width:16px;height:16px;border-radius:50%;border:2px solid #4a4a4a;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin-top:2px;}
+.radio-item.selected .radio-dot{border-color:#4f8dff;}
+.radio-item.selected .radio-dot::after{content:'';width:8px;height:8px;border-radius:50%;background:#4f8dff;}
+.radio-text{flex:1;min-width:0;}
+.radio-title{font-size:0.9rem;color:#ececec;font-weight:500;}
+.radio-title .badge{color:#4f8dff;font-size:0.7rem;font-weight:600;margin-left:6px;}
+.radio-desc{font-size:0.76rem;color:#7a7a7a;margin-top:3px;line-height:1.45;}
+.about-text{color:#bdbdbd;font-size:0.88rem;line-height:1.65;padding:2px 0 8px 0;}
+.account-info{color:#bdbdbd;font-size:0.88rem;line-height:1.55;padding:4px 0 12px 0;}
+.modal{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.72);z-index:1000010;display:none;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;font-family:'Space Grotesk',sans-serif;backdrop-filter:blur(4px);}
+.modal.open{display:flex;}
+.modal-content{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
+.modal-title{font-size:1.15rem;color:#fff;font-weight:600;margin:0 0 8px 0;}
+.modal-text{font-size:0.88rem;color:#8a8a8a;line-height:1.55;margin:0 0 20px 0;}
+.modal-input{width:100%;height:44px;border-radius:10px;border:1px solid #2a2a2a;background:#0a0a0a;color:#fff;font-size:0.95rem;padding:0 14px;font-family:'Space Grotesk',sans-serif;box-sizing:border-box;margin-bottom:16px;outline:none;transition:border-color 0.2s;}
+.modal-input:focus{border-color:#4f8dff;}
+.modal-btn{width:100%;height:44px;border-radius:10px;border:none;font-size:0.95rem;font-family:'Space Grotesk',sans-serif;cursor:pointer;margin-bottom:8px;transition:all 0.2s;font-weight:500;}
+.modal-btn.primary{background:#4f8dff;color:#fff;}
+.modal-btn.primary:hover{background:#3a7ae0;}
+.modal-btn.secondary{background:#1a1a1a;color:#bdbdbd;border:1px solid #2a2a2a;}
+.modal-btn.secondary:hover{background:#222;color:#fff;}
+.modal-btn.danger{background:#ff5555;color:#fff;}
+.modal-btn.danger:hover{background:#e04444;}
+"""
+
+UI_JS = """
+export default function(component){
+    const {parentElement,setTriggerValue}=component;
+    const $=(s)=>parentElement.querySelector(s);
+    const $$=(s)=>parentElement.querySelectorAll(s);
+    const dataEl=$('#strafe-data');
+    if(!dataEl)return;
+    const DATA=JSON.parse(dataEl.textContent);
+    function getLS(k,d){try{return localStorage.getItem(k)||d;}catch(e){return d;}}
+    function setLS(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+    let ui={sidebarOpen:getLS('strafe_sidebar','0')==='1',settingsOpen:getLS('strafe_settings','0')==='1',tab:getLS('strafe_tab','account')};
+    function saveUI(){setLS('strafe_sidebar',ui.sidebarOpen?'1':'0');setLS('strafe_settings',ui.settingsOpen?'1':'0');setLS('strafe_tab',ui.tab);}
+    const isLoggedIn=!!DATA.user;
+    const $accountBtn=$('#account-btn');
+    $accountBtn.textContent=isLoggedIn?DATA.user:'Guest, @no_email.gmail.com';
+    const $sidebar=$('#sidebar');
+    const $sidebarBackdrop=$('#sidebar-backdrop');
+    const $chatList=$('#chat-list');
+    const $settingsPanel=$('#settings-panel');
+    const $settingsBackdrop=$('#settings-backdrop');
+    const $loginModal=$('#login-modal');
+    const $loginEmail=$('#login-email');
+    const $confirmModal=$('#confirm-modal');
+    const $confirmTitle=$('#confirm-title');
+    const $confirmText=$('#confirm-text');
+    function openSidebar(){ui.sidebarOpen=true;saveUI();applySidebar();}
+    function closeSidebar(){ui.sidebarOpen=false;saveUI();applySidebar();}
+    function applySidebar(){$sidebar.classList.toggle('open',ui.sidebarOpen);$sidebarBackdrop.classList.toggle('open',ui.sidebarOpen);}
+    function openSettings(){ui.settingsOpen=true;saveUI();applySettings();}
+    function closeSettings(){ui.settingsOpen=false;saveUI();applySettings();}
+    function applySettings(){$settingsPanel.classList.toggle('open',ui.settingsOpen);$settingsBackdrop.classList.toggle('open',ui.settingsOpen);}
+    function selectTab(t){ui.tab=t;saveUI();$$('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));$$('.tab-content').forEach(el=>el.classList.toggle('active',el.dataset.tabContent===t));}
+    $$('.tab').forEach(el=>el.addEventListener('click',()=>selectTab(el.dataset.tab)));
+    let confirmCallback=null;
+    function showConfirm(title,text,cb){$confirmTitle.textContent=title;$confirmText.textContent=text;confirmCallback=cb;$confirmModal.classList.add('open');}
+    function closeConfirm(){$confirmModal.classList.remove('open');confirmCallback=null;}
+    $('#confirm-yes').onclick=()=>{if(confirmCallback)confirmCallback();};
+    $('#confirm-no').onclick=closeConfirm;
+    function renderChats(){
+        $chatList.innerHTML='';
+        const chats=DATA.chats||[];
+        if(chats.length===0){const empty=document.createElement('div');empty.className='empty-chats';empty.textContent='No chats yet';$chatList.appendChild(empty);return;}
+        chats.forEach(c=>{
+            const item=document.createElement('div');
+            item.className='chat-item'+(c.id===DATA.current_chat_id?' active':'');
+            const title=document.createElement('span');
+            title.className='chat-title';
+            title.textContent=c.title||'New chat';
+            const del=document.createElement('button');
+            del.className='chat-del';
+            del.type='button';
+            del.textContent='\\u2715';
+            del.onclick=(ev)=>{
+                ev.stopPropagation();
+                showConfirm('Delete chat?','Are you sure you want to delete this chat? This cannot be undone.',()=>{
+                    closeConfirm();
+                    closeSidebar();
+                    setTriggerValue('ui_action',{type:'delete_chat',chat_id:c.id});
+                });
+            };
+            item.appendChild(title);
+            item.appendChild(del);
+            item.onclick=()=>{
+                if(c.id===DATA.current_chat_id){closeSidebar();return;}
+                closeSidebar();
+                setTriggerValue('ui_action',{type:'open_chat',chat_id:c.id});
+            };
+            $chatList.appendChild(item);
+        });
+    }
+    const LANGUAGES=[{id:'en',name:'English',desc:'Auto on'},{id:'ru',name:'Russian',desc:''},{id:'uk',name:'Ukrainian',desc:''}];
+    function renderLanguages(){
+        const $langList=$('#lang-list');
+        $langList.innerHTML='';
+        LANGUAGES.forEach(lang=>{
+            const item=document.createElement('div');
+            item.className='radio-item'+(DATA.language===lang.id?' selected':'');
+            const dot=document.createElement('div');
+            dot.className='radio-dot';
+            const text=document.createElement('div');
+            text.className='radio-text';
+            const title=document.createElement('div');
+            title.className='radio-title';
+            title.textContent=lang.name;
+            if(lang.desc){const badge=document.createElement('span');badge.className='badge';badge.textContent='('+lang.desc+')';title.appendChild(badge);}
+            text.appendChild(title);
+            item.appendChild(dot);
+            item.appendChild(text);
+            item.onclick=()=>{
+                if(DATA.language!==lang.id){closeSettings();setTriggerValue('ui_action',{type:'set_language',lang:lang.id});}
+            };
+            $langList.appendChild(item);
+        });
+    }
+    const MODELS=[{id:'groq',name:'Groq',desc:'Groq has strong coding/math skills. Also known for fast responses.',badge:'Auto on'},{id:'celeris',name:'Celeris',desc:'Celeris is considered to be the fastest model, outrun groq. The skills are currently unknown.',badge:''}];
+    function renderModels(){
+        const $modelList=$('#model-list');
+        $modelList.innerHTML='';
+        MODELS.forEach(m=>{
+            const item=document.createElement('div');
+            item.className='radio-item'+(DATA.model===m.id?' selected':'');
+            const dot=document.createElement('div');
+            dot.className='radio-dot';
+            const text=document.createElement('div');
+            text.className='radio-text';
+            const title=document.createElement('div');
+            title.className='radio-title';
+            title.textContent=m.name;
+            if(m.badge){const badge=document.createElement('span');badge.className='badge';badge.textContent='('+m.badge+')';title.appendChild(badge);}
+            const desc=document.createElement('div');
+            desc.className='radio-desc';
+            desc.textContent=m.desc;
+            text.appendChild(title);
+            text.appendChild(desc);
+            item.appendChild(dot);
+            item.appendChild(text);
+            item.onclick=()=>{
+                if(DATA.model!==m.id){closeSettings();setTriggerValue('ui_action',{type:'set_model',model:m.id});}
+            };
+            $modelList.appendChild(item);
+        });
+    }
+    function renderAccount(){
+        const $accountInfo=$('#account-info');
+        const $logoutBtn=$('#logout-btn');
+        $accountInfo.textContent=isLoggedIn?('Signed in as '+DATA.user):'You are browsing as a guest. Sign in to save chats and settings.';
+        $logoutBtn.style.display=isLoggedIn?'flex':'none';
+    }
+    function openLogin(){$loginEmail.value='';$loginModal.classList.add('open');setTimeout(()=>$loginEmail.focus(),100);}
+    function closeLogin(){$loginModal.classList.remove('open');}
+    $('#login-submit').onclick=()=>{
+        const email=$loginEmail.value.trim();
+        if(!email||!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)){$loginEmail.style.borderColor='#ff5555';return;}
+        closeLogin();
+        setTriggerValue('ui_action',{type:'login',email:email});
+    };
+    $('#login-cancel').onclick=closeLogin;
+    $loginEmail.onkeydown=(e)=>{
+        if(e.key==='Enter')$('#login-submit').click();
+        else if(e.key==='Escape')closeLogin();
+        else $loginEmail.style.borderColor='';
+    };
+    $('#menu-btn').onclick=openSidebar;
+    $('#sidebar-close').onclick=closeSidebar;
+    $sidebarBackdrop.onclick=closeSidebar;
+    $('#new-chat-btn').onclick=()=>{closeSidebar();setTriggerValue('ui_action',{type:'new_chat'});};
+    $('#settings-btn').onclick=openSettings;
+    $('#settings-close').onclick=closeSettings;
+    $settingsBackdrop.onclick=closeSettings;
+    $accountBtn.onclick=()=>{if(isLoggedIn){openSettings();selectTab('account');}else{openLogin();}};
+    $('#logout-btn').onclick=()=>{closeSettings();setTriggerValue('ui_action',{type:'logout'});};
+    $('#delete-all-btn').onclick=()=>{
+        showConfirm('Delete all chats?','Are you sure you want to delete ALL chats? This cannot be undone.',()=>{
+            closeConfirm();
+            closeSettings();
+            setTriggerValue('ui_action',{type:'delete_all_chats'});
+        });
+    };
+    applySidebar();
+    applySettings();
+    renderChats();
+    renderLanguages();
+    renderModels();
+    renderAccount();
+    selectTab(ui.tab);
+}
+"""
+
+
+def build_ui_html(data_json):
+    parts = [
+        '<div id="topbar">',
+        '  <button id="menu-btn" class="tb-btn" type="button">&#9776;</button>',
+        '  <button id="account-btn" class="tb-btn" type="button"></button>',
+        '</div>',
+        '<div id="sidebar-backdrop"></div>',
+        '<aside id="sidebar">',
+        '  <div class="sidebar-header">',
+        '    <span class="sidebar-title">YOUR CHATS</span>',
+        '    <button id="sidebar-close" class="icon-x" type="button">&#10005;</button>',
+        '  </div>',
+        '  <button id="new-chat-btn" type="button">&#65291; New chat</button>',
+        '  <div id="chat-list"></div>',
+        '</aside>',
+        '<button id="settings-btn" type="button">&#9881;&#xFE0E;</button>',
+        '<div id="settings-backdrop"></div>',
+        '<aside id="settings-panel">',
+        '  <div class="settings-header">',
+        '    <span class="settings-title">Settings</span>',
+        '    <button id="settings-close" class="icon-x" type="button">&#10005;</button>',
+        '  </div>',
+        '  <div class="tabs">',
+        '    <button class="tab active" data-tab="account" type="button">Account</button>',
+        '    <button class="tab" data-tab="language" type="button">Language</button>',
+        '    <button class="tab" data-tab="models" type="button">Models/Operators</button>',
+        '    <button class="tab" data-tab="about" type="button">About</button>',
+        '  </div>',
+        '  <div class="tab-content active" data-tab-content="account">',
+        '    <div class="setting-section">',
+        '      <div class="setting-label">Account</div>',
+        '      <div class="account-info" id="account-info"></div>',
+        '      <button class="setting-btn" id="logout-btn" type="button">Log out</button>',
+        '      <button class="setting-btn danger" id="delete-all-btn" type="button">Delete all chats</button>',
+        '    </div>',
+        '  </div>',
+        '  <div class="tab-content" data-tab-content="language">',
+        '    <div class="setting-section">',
+        '      <div class="setting-label">Language</div>',
+        '      <div id="lang-list"></div>',
+        '    </div>',
+        '  </div>',
+        '  <div class="tab-content" data-tab-content="models">',
+        '    <div class="setting-section">',
+        '      <div class="setting-label">Operators</div>',
+        '      <div id="model-list"></div>',
+        '    </div>',
+        '  </div>',
+        '  <div class="tab-content" data-tab-content="about">',
+        '    <div class="setting-section">',
+        '      <div class="setting-label">About</div>',
+        '      <div class="about-text">Strafe is a project made for you\'re use, no data can be seen by anyone even by owner.</div>',
+        '    </div>',
+        '  </div>',
+        '</aside>',
+        '<div id="login-modal" class="modal">',
+        '  <div class="modal-content">',
+        '    <h2 class="modal-title">Sign in</h2>',
+        '    <p class="modal-text">Enter your email to save chats and settings.</p>',
+        '    <input type="email" id="login-email" class="modal-input" placeholder="you@example.com"/>',
+        '    <button id="login-submit" class="modal-btn primary" type="button">Continue</button>',
+        '    <button id="login-cancel" class="modal-btn secondary" type="button">Cancel</button>',
+        '  </div>',
+        '</div>',
+        '<div id="confirm-modal" class="modal">',
+        '  <div class="modal-content">',
+        '    <h2 class="modal-title" id="confirm-title">Delete chat?</h2>',
+        '    <p class="modal-text" id="confirm-text">Are you sure?</p>',
+        '    <button id="confirm-yes" class="modal-btn danger" type="button">Delete</button>',
+        '    <button id="confirm-no" class="modal-btn secondary" type="button">Cancel</button>',
+        '  </div>',
+        '</div>',
+        '<script id="strafe-data" type="application/json">' + data_json + '</script>',
+    ]
+    return "\n".join(parts)
+
+
+def _chat_store():
+    if "chats_by_user" not in st.session_state:
+        st.session_state.chats_by_user = {}
+    key = st.session_state.get("user_email") or "__guest__"
+    if key not in st.session_state.chats_by_user:
+        st.session_state.chats_by_user[key] = {}
+    return st.session_state.chats_by_user[key]
+
+
+def _create_new_chat_id():
+    return "chat_" + uuid.uuid4().hex[:12]
+
+
+def _create_current_chat():
+    store = _chat_store()
+    to_remove = [cid for cid, c in store.items() if not c.get("messages")]
+    for cid in to_remove:
+        del store[cid]
+    cid = _create_new_chat_id()
+    msgs = []
+    store[cid] = {"id": cid, "title": "New chat", "messages": msgs, "created": time.time()}
+    st.session_state.current_chat_id = cid
+    st.session_state.messages = msgs
+
+
+def _get_chat_summaries():
+    store = _chat_store()
+    summaries = []
+    for cid, c in store.items():
+        msgs = c.get("messages") or []
+        if not msgs:
+            continue
+        first_user = next((m for m in msgs if m.get("role") == "user"), None)
+        if first_user:
+            title = (first_user.get("content") or "").strip().replace("\n", " ")[:48]
+        else:
+            title = "New chat"
+        if not title:
+            title = "New chat"
+        summaries.append({"id": cid, "title": title, "_created": c.get("created", 0)})
+    summaries.sort(key=lambda x: x["_created"], reverse=True)
+    for s in summaries:
+        del s["_created"]
+    return summaries
+
+
+def init_ui_state():
+    if "user_email" not in st.session_state:
+        st.session_state.user_email = None
+    if "language" not in st.session_state:
+        st.session_state.language = "en"
+    if "model_choice" not in st.session_state:
+        st.session_state.model_choice = "groq"
+    store = _chat_store()
+    cid = st.session_state.get("current_chat_id")
+    if cid is None or cid not in store:
+        _create_current_chat()
+
+
+def get_action_field(action, name, default=None):
+    if action is None:
+        return default
+    if isinstance(action, dict):
+        return action.get(name, default)
+    return getattr(action, name, default)
+
+
+def handle_action(action):
+    t = get_action_field(action, "type")
+    if t == "new_chat":
+        _create_current_chat()
+    elif t == "open_chat":
+        cid = get_action_field(action, "chat_id")
+        store = _chat_store()
+        if cid and cid in store:
+            st.session_state.current_chat_id = cid
+            st.session_state.messages = store[cid]["messages"]
+    elif t == "delete_chat":
+        cid = get_action_field(action, "chat_id")
+        store = _chat_store()
+        if cid and cid in store:
+            del store[cid]
+            if st.session_state.get("current_chat_id") == cid:
+                remaining = [c for c in store.values() if c.get("messages")]
+                if remaining:
+                    remaining.sort(key=lambda c: c.get("created", 0), reverse=True)
+                    st.session_state.current_chat_id = remaining[0]["id"]
+                    st.session_state.messages = remaining[0]["messages"]
+                else:
+                    _create_current_chat()
+    elif t == "login":
+        email = get_action_field(action, "email")
+        if email:
+            st.session_state.user_email = email
+            store = _chat_store()
+            if store:
+                most_recent = max(store.values(), key=lambda c: c.get("created", 0))
+                st.session_state.current_chat_id = most_recent["id"]
+                st.session_state.messages = most_recent["messages"]
+            else:
+                _create_current_chat()
+    elif t == "logout":
+        st.session_state.user_email = None
+        store = _chat_store()
+        if store:
+            most_recent = max(store.values(), key=lambda c: c.get("created", 0))
+            st.session_state.current_chat_id = most_recent["id"]
+            st.session_state.messages = most_recent["messages"]
+        else:
+            _create_current_chat()
+    elif t == "delete_all_chats":
+        key = st.session_state.get("user_email") or "__guest__"
+        st.session_state.chats_by_user[key] = {}
+        _create_current_chat()
+    elif t == "set_language":
+        lang = get_action_field(action, "lang")
+        if lang:
+            st.session_state.language = lang
+    elif t == "set_model":
+        model = get_action_field(action, "model")
+        if model:
+            st.session_state.model_choice = model
+    st.rerun()
+
+
+def render_ui():
+    user = st.session_state.get("user_email")
+    chats = _get_chat_summaries()
+    current_cid = st.session_state.get("current_chat_id")
+    lang = st.session_state.get("language", "en")
+    model = st.session_state.get("model_choice", "groq")
+    data = {
+        "user": user,
+        "chats": chats,
+        "current_chat_id": current_cid,
+        "language": lang,
+        "model": model,
+    }
+    data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    h = hashlib.md5(data_json.encode()).hexdigest()[:10]
+    name = f"strafe_ui_{h}"
+    if "ui_factories" not in st.session_state:
+        st.session_state.ui_factories = {}
+    if name not in st.session_state.ui_factories:
+        st.session_state.ui_factories[name] = components.component(
+            name, html=build_ui_html(data_json), css=UI_CSS, js=UI_JS
+        )
+    comp = st.session_state.ui_factories[name]
+    result = comp(key=f"strafe_ui_k_{h}", on_ui_action_change=lambda: None)
+    if result:
+        action = getattr(result, "ui_action", None)
+        if action:
+            handle_action(action)
+
 
 def get_prompt():
     result = chat_input(key="strafe_inp", on_submitted_change=lambda: None)
@@ -502,19 +748,11 @@ def get_prompt():
     ma = getattr(result, "menu_action", None)
     if ma:
         st.session_state["menu_action"] = ma
-    ca = getattr(result, "chat_action", None)
-    if ca:
-        st.session_state["chat_action"] = ca
-    sc = getattr(result, "settings_change", None)
-    if sc:
-        st.session_state["settings_change"] = sc
-    login = getattr(result, "login", None)
-    if login:
-        st.session_state["login"] = login
     submitted = getattr(result, "submitted", None)
     if submitted:
         return submitted
     return None
+
 
 CSS = """
 <link href='https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap' rel='stylesheet'>
@@ -523,7 +761,7 @@ html,body,[class*='css'],.stApp,#root,.main,.block-container{font-family:'Space 
 html,body,.stApp,#root{overflow-x:hidden !important;max-width:100vw !important;}
 section.main,section[data-testid='stMain'],[data-testid='stAppViewContainer'],[data-testid='stMainBlockContainer'],[data-testid='stAppView'],[data-testid='stVerticalBlockBorderWrapper']{overflow-x:hidden !important;max-width:100vw !important;width:100% !important;}
 #MainMenu,footer,header{visibility:hidden;}
-section.main .block-container{padding:0 1rem 160px 1rem !important;max-width:760px;overflow-x:hidden;}
+section.main .block-container{padding:64px 1rem 160px 1rem !important;max-width:760px;overflow-x:hidden;}
 div[data-testid='stVerticalBlock']{gap:0 !important;max-width:100% !important;}
 div[data-testid='stChatMessage']{background:transparent !important;border:none !important;padding:8px 0 0 0 !important;margin:0 !important;overflow:visible !important;}
 div[data-testid^='stChatMessageAvatar']{display:none !important;}
@@ -573,6 +811,7 @@ SYSTEM = (
 SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 HISTORY_LIMIT = 30
 
+
 def pick_model():
     if "model" in st.session_state:
         return st.session_state.model
@@ -597,8 +836,6 @@ def pick_model():
     st.session_state.model = PREFERRED[0]
     return PREFERRED[0]
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 def get_working_key():
     if "failed_keys" not in st.session_state:
@@ -609,10 +846,12 @@ def get_working_key():
         available = KEYS
     return random.choice(available)
 
+
 def mark_key_failed(key):
     if "failed_keys" not in st.session_state:
         st.session_state.failed_keys = set()
     st.session_state.failed_keys.add(key)
+
 
 def web_search(query, num_results=3):
     try:
@@ -627,10 +866,11 @@ def web_search(query, num_results=3):
         if not results:
             return [{"title": "No results", "link": "", "snippet": "Search returned empty. Tell the user."}]
         return results
-    except DDGSException as e:
+    except DDGSException:
         return [{"title": "Rate Limited", "link": "", "snippet": "Rate limit reached. Tell the user."}]
     except Exception as e:
         return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. Tell the user."}]
+
 
 def msg_to_api(m, distance_from_latest=None, full_res=False):
     imgs = m.get("images") or []
@@ -638,14 +878,11 @@ def msg_to_api(m, distance_from_latest=None, full_res=False):
     has_media = bool(imgs or files)
     if not has_media:
         return {"role": m["role"], "content": m["content"]}
-    
     parts = [{"type": "text", "text": m["content"]}]
-    
     for f in files:
         fname = f.get("name", "file")
         fcontent = f.get("content", "")
         parts.insert(0, {"type": "text", "text": f"[Attached file: {fname}]\n```\n{fcontent}\n```"})
-    
     if imgs:
         if distance_from_latest is not None and not full_res:
             if distance_from_latest >= 15:
@@ -659,8 +896,8 @@ def msg_to_api(m, distance_from_latest=None, full_res=False):
         else:
             for u in imgs:
                 parts.append({"type": "image_url", "image_url": {"url": u}})
-    
     return {"role": m["role"], "content": parts}
+
 
 def build_payload(history):
     model = pick_model()
@@ -672,6 +909,7 @@ def build_payload(history):
         kw["reasoning_effort"] = "medium"
         kw["reasoning_format"] = "parsed"
     return kw
+
 
 def call_groq_with_retry(kwargs):
     tried = set()
@@ -696,19 +934,18 @@ def call_groq_with_retry(kwargs):
             continue
     return None, last_err
 
+
 def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=False):
     t0 = time.time()
     if look_back or clearer_image_back:
         slice_msgs = st.session_state.messages
     else:
         slice_msgs = st.session_state.messages[-HISTORY_LIMIT:]
-    
     total = len(slice_msgs)
     history = []
     for idx, m in enumerate(slice_msgs):
         distance = total - 1 - idx
         history.append(msg_to_api(m, distance_from_latest=distance, full_res=clearer_image_back))
-
     tools = None
     if use_search:
         tools = [{
@@ -721,29 +958,25 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Clean keywords ONLY. Fix spelling. (e.g., 'Elon Musk first trillionaire 2026', NOT 'who is the first trillionare')."
+                            "description": "Clean keywords ONLY. Fix spelling."
                         }
                     },
                     "required": ["query"]
                 }
             }
         }]
-
     max_rounds = 5 if use_search else 1
     tool_calls_made = 0
     last_err = None
-
     for round_idx in range(max_rounds):
         kwargs = build_payload(history)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "required" if round_idx == 0 and tool_calls_made == 0 else "auto"
-
         r, err = call_groq_with_retry(kwargs)
         if r is None:
             last_err = err
             break
-
         msg = r.choices[0].message
         if tools and getattr(msg, "tool_calls", None):
             tool_calls_made += len(msg.tool_calls)
@@ -779,8 +1012,8 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
                 "think": use_think,
                 "reasoning": reasoning if use_think else None
             }
-
     raise RuntimeError(last_err or "All API keys failed")
+
 
 def info_html(m):
     sent = m.get("sent", "?")
@@ -794,18 +1027,23 @@ def info_html(m):
     flag_str = " ".join(flags) + " " if flags else ""
     return f'<div class="info-line">{flag_str}sent <span>{sent}</span> &nbsp;\u00b7&nbsp; {secs}s &nbsp;\u00b7&nbsp; {tps}</div>'
 
+
+init_ui_state()
+render_ui()
+
 act = st.session_state.pop("act", None)
 if act:
     kind, i = act
     if kind == "retry" and i > 0 and st.session_state.messages[i - 1]["role"] == "user":
         prev_msg = st.session_state.messages[i - 1]
-        st.session_state.messages = st.session_state.messages[:i]
+        st.session_state.messages[:] = st.session_state.messages[:i]
         try:
             result = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False))
             st.session_state.messages.append({"role": "assistant", **result})
         except Exception as e:
             st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}", "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": False, "think": False, "reasoning": None})
         st.session_state["show"] = None
+        st.rerun()
     elif kind == "edit":
         st.session_state["editing"] = i
         st.session_state["show"] = None
@@ -831,29 +1069,6 @@ if pending is not None:
     st.session_state["editing"] = None
     st.rerun()
 
-ca = st.session_state.pop("chat_action", None)
-if ca:
-    action = ca.get("action")
-    if action == "new":
-        st.session_state.messages = []
-        st.rerun()
-    elif action == "load":
-        # In a real app, you'd load messages from storage here
-        st.session_state.messages = []
-        st.rerun()
-    elif action == "delete" or action == "delete_all":
-        if action == "delete_all":
-            st.session_state.messages = []
-        st.rerun()
-
-sc = st.session_state.pop("settings_change", None)
-if sc:
-    st.toast(f"Settings updated: {sc}")
-
-login = st.session_state.pop("login", None)
-if login:
-    st.toast(f"Logged in as {login}")
-
 show = st.session_state.get("show")
 editing = st.session_state.get("editing")
 
@@ -864,7 +1079,7 @@ for i, m in enumerate(st.session_state.messages):
             sc, sk = st.columns([1, 6])
             with sc:
                 if st.button("Save", key=f"sv{i}"):
-                    st.session_state.messages = st.session_state.messages[:i]
+                    st.session_state.messages[:] = st.session_state.messages[:i]
                     st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False), "images": m.get("images", []), "files": m.get("files", [])}
                     st.rerun()
             with sk:
