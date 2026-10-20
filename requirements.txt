@@ -1,3 +1,4 @@
 streamlit
 groq
 ddgs
+openai>=1.40.0
