@@ -1,8 +1,9 @@
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
-import random, time, html as H, json, hashlib, uuid
+import random, time, html as H, json, uuid, os, sqlite3
 from datetime import datetime
+from pathlib import Path
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException
 
@@ -12,6 +13,98 @@ SEND_GLYPH = "\u2794"
 MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 PLUS_GLYPH = "\uff0b"
+
+DB_PATH = Path(os.environ.get("STRAFE_DB", "strafe.db"))
+
+def _db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def db_init():
+    with _db() as c:
+        c.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                email TEXT PRIMARY KEY,
+                created REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chats (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                title TEXT NOT NULL,
+                messages TEXT NOT NULL,
+                created REAL NOT NULL,
+                updated REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chats_email_updated ON chats(email, updated DESC);
+            CREATE TABLE IF NOT EXISTS settings (
+                email TEXT PRIMARY KEY,
+                language TEXT NOT NULL DEFAULT 'en',
+                model TEXT NOT NULL DEFAULT 'groq'
+            );
+        """)
+
+def db_upsert_user(email):
+    with _db() as c:
+        c.execute("INSERT OR IGNORE INTO users(email, created) VALUES(?, ?)", (email, time.time()))
+
+def db_get_chats(email):
+    with _db() as c:
+        rows = c.execute(
+            "SELECT id, title, messages, created, updated FROM chats WHERE email=? ORDER BY updated DESC",
+            (email,),
+        ).fetchall()
+    out = {}
+    for r in rows:
+        out[r["id"]] = {
+            "id": r["id"],
+            "title": r["title"],
+            "messages": json.loads(r["messages"]),
+            "created": r["created"],
+            "updated": r["updated"],
+        }
+    return out
+
+def db_save_chat(email, chat):
+    with _db() as c:
+        c.execute(
+            """INSERT INTO chats(id, email, title, messages, created, updated)
+               VALUES(?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 title=excluded.title,
+                 messages=excluded.messages,
+                 updated=excluded.updated""",
+            (chat["id"], email, chat["title"], json.dumps(chat["messages"]),
+             chat.get("created", time.time()), chat.get("updated", time.time())),
+        )
+
+def db_delete_chat(email, chat_id):
+    with _db() as c:
+        c.execute("DELETE FROM chats WHERE id=? AND email=?", (chat_id, email))
+
+def db_delete_all_chats(email):
+    with _db() as c:
+        c.execute("DELETE FROM chats WHERE email=?", (email,))
+
+def db_get_settings(email):
+    with _db() as c:
+        row = c.execute("SELECT language, model FROM settings WHERE email=?", (email,)).fetchone()
+    if row is None:
+        return {"language": "en", "model": "groq"}
+    return {"language": row["language"], "model": row["model"]}
+
+def db_set_settings(email, language=None, model=None):
+    cur = db_get_settings(email)
+    language = language or cur["language"]
+    model = model or cur["model"]
+    with _db() as c:
+        c.execute(
+            """INSERT INTO settings(email, language, model) VALUES(?, ?, ?)
+               ON CONFLICT(email) DO UPDATE SET language=excluded.language, model=excluded.model""",
+            (email, language, model),
+        )
+
+db_init()
 
 INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
 INPUT_CSS = """
@@ -289,8 +382,10 @@ UI_CSS = """
 .chat-del{width:22px;height:22px;border-radius:50%;border:none;background:transparent;color:#5a5a5a;font-size:0.72rem;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;transition:all 0.15s;}
 .chat-del:hover{color:#ff5555;background:#2a1a1a;}
 .empty-chats{padding:24px 16px;color:#4a4a4a;font-size:0.84rem;text-align:center;line-height:1.5;}
-#settings-btn{position:fixed;bottom:140px;right:20px;width:48px;height:48px;border-radius:50%;border:1px solid #2a2a2a;background:#1a1a1a;color:#bdbdbd;font-size:1.15rem;cursor:pointer;z-index:999997;display:flex;align-items:center;justify-content:center;transition:all 0.2s;box-shadow:0 4px 20px rgba(0,0,0,0.5);font-family:'Space Grotesk',sans-serif;}
-#settings-btn:hover{color:#fff;border-color:#4f8dff;transform:rotate(45deg);}
+.sidebar-footer{padding:12px 14px;border-top:1px solid #1f1f1f;flex-shrink:0;}
+#settings-btn{width:100%;height:42px;border-radius:10px;border:1px solid #2a2a2a;background:#181818;color:#bdbdbd;font-size:0.9rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;display:flex;align-items:center;justify-content:center;gap:8px;transition:all 0.2s;}
+#settings-btn:hover{color:#fff;border-color:#4f8dff;background:#222;}
+#settings-btn .gear{font-size:1.05rem;line-height:1;}
 #settings-backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.55);z-index:1000002;opacity:0;pointer-events:none;transition:opacity 0.2s;}
 #settings-backdrop.open{opacity:1;pointer-events:auto;}
 #settings-panel{position:fixed;top:0;right:0;width:400px;max-width:92vw;height:100vh;background:#101010;border-left:1px solid #2a2a2a;z-index:1000003;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.25s ease;font-family:'Space Grotesk',sans-serif;}
@@ -486,7 +581,7 @@ export default function(component){
     $('#sidebar-close').onclick=closeSidebar;
     $sidebarBackdrop.onclick=closeSidebar;
     $('#new-chat-btn').onclick=()=>{closeSidebar();setTriggerValue('ui_action',{type:'new_chat'});};
-    $('#settings-btn').onclick=openSettings;
+    $('#settings-btn').onclick=()=>{closeSidebar();openSettings();};
     $('#settings-close').onclick=closeSettings;
     $settingsBackdrop.onclick=closeSettings;
     $accountBtn.onclick=()=>{if(isLoggedIn){openSettings();selectTab('account');}else{openLogin();}};
@@ -523,8 +618,10 @@ def build_ui_html(data_json):
         '  </div>',
         '  <button id="new-chat-btn" type="button">&#65291; New chat</button>',
         '  <div id="chat-list"></div>',
+        '  <div class="sidebar-footer">',
+        '    <button id="settings-btn" type="button"><span class="gear">&#9881;&#xFE0E;</span><span>Settings</span></button>',
+        '  </div>',
         '</aside>',
-        '<button id="settings-btn" type="button">&#9881;&#xFE0E;</button>',
         '<div id="settings-backdrop"></div>',
         '<aside id="settings-panel">',
         '  <div class="settings-header">',
@@ -587,12 +684,12 @@ def build_ui_html(data_json):
 
 
 def _chat_store():
-    if "chats_by_user" not in st.session_state:
-        st.session_state.chats_by_user = {}
-    key = st.session_state.get("user_email") or "__guest__"
-    if key not in st.session_state.chats_by_user:
-        st.session_state.chats_by_user[key] = {}
-    return st.session_state.chats_by_user[key]
+    email = st.session_state.get("user_email")
+    if not email:
+        if "guest_chats" not in st.session_state:
+            st.session_state.guest_chats = {}
+        return st.session_state.guest_chats
+    return db_get_chats(email)
 
 
 def _create_new_chat_id():
@@ -604,11 +701,37 @@ def _create_current_chat():
     to_remove = [cid for cid, c in store.items() if not c.get("messages")]
     for cid in to_remove:
         del store[cid]
+        if st.session_state.get("user_email"):
+            db_delete_chat(st.session_state.user_email, cid)
     cid = _create_new_chat_id()
     msgs = []
-    store[cid] = {"id": cid, "title": "New chat", "messages": msgs, "created": time.time()}
+    chat = {"id": cid, "title": "New chat", "messages": msgs, "created": time.time(), "updated": time.time()}
+    store[cid] = chat
     st.session_state.current_chat_id = cid
     st.session_state.messages = msgs
+    st.session_state.chat_created = chat["created"]
+
+
+def _persist_current_chat():
+    email = st.session_state.get("user_email")
+    if not email:
+        return
+    msgs = st.session_state.get("messages", [])
+    if not msgs:
+        return
+    cid = st.session_state.get("current_chat_id")
+    if not cid:
+        return
+    first_user = next((m for m in msgs if m.get("role") == "user"), None)
+    title = ((first_user or {}).get("content") or "").strip().replace("\n", " ")[:48] or "New chat"
+    chat = {
+        "id": cid,
+        "title": title,
+        "messages": msgs,
+        "created": st.session_state.get("chat_created", time.time()),
+        "updated": time.time(),
+    }
+    db_save_chat(email, chat)
 
 
 def _get_chat_summaries():
@@ -619,30 +742,42 @@ def _get_chat_summaries():
         if not msgs:
             continue
         first_user = next((m for m in msgs if m.get("role") == "user"), None)
-        if first_user:
-            title = (first_user.get("content") or "").strip().replace("\n", " ")[:48]
-        else:
-            title = "New chat"
-        if not title:
-            title = "New chat"
-        summaries.append({"id": cid, "title": title, "_created": c.get("created", 0)})
-    summaries.sort(key=lambda x: x["_created"], reverse=True)
+        title = ((first_user or {}).get("content") or "").strip().replace("\n", " ")[:48] or "New chat"
+        summaries.append({"id": cid, "title": title, "_updated": c.get("updated", c.get("created", 0))})
+    summaries.sort(key=lambda x: x["_updated"], reverse=True)
     for s in summaries:
-        del s["_created"]
+        del s["_updated"]
     return summaries
 
 
 def init_ui_state():
     if "user_email" not in st.session_state:
         st.session_state.user_email = None
-    if "language" not in st.session_state:
-        st.session_state.language = "en"
-    if "model_choice" not in st.session_state:
-        st.session_state.model_choice = "groq"
+
+    email = st.session_state.get("user_email")
+    if email:
+        s = db_get_settings(email)
+        st.session_state.language = s["language"]
+        st.session_state.model_choice = s["model"]
+    else:
+        st.session_state.setdefault("language", "en")
+        st.session_state.setdefault("model_choice", "groq")
+
     store = _chat_store()
     cid = st.session_state.get("current_chat_id")
+
     if cid is None or cid not in store:
-        _create_current_chat()
+        remaining = [c for c in store.values() if c.get("messages")]
+        if remaining:
+            remaining.sort(key=lambda c: c.get("updated", c.get("created", 0)), reverse=True)
+            st.session_state.current_chat_id = remaining[0]["id"]
+            st.session_state.messages = remaining[0]["messages"]
+            st.session_state.chat_created = remaining[0].get("created", time.time())
+        else:
+            _create_current_chat()
+    else:
+        st.session_state.messages = store[cid]["messages"]
+        st.session_state.chat_created = store[cid].get("created", time.time())
 
 
 def get_action_field(action, name, default=None):
@@ -655,59 +790,88 @@ def get_action_field(action, name, default=None):
 
 def handle_action(action):
     t = get_action_field(action, "type")
+
+    def _reset():
+        st.session_state["editing"] = None
+        st.session_state["act"] = None
+
     if t == "new_chat":
+        _reset()
         _create_current_chat()
+
     elif t == "open_chat":
         cid = get_action_field(action, "chat_id")
         store = _chat_store()
         if cid and cid in store:
+            _reset()
             st.session_state.current_chat_id = cid
             st.session_state.messages = store[cid]["messages"]
+            st.session_state.chat_created = store[cid].get("created", time.time())
+
     elif t == "delete_chat":
         cid = get_action_field(action, "chat_id")
+        email = st.session_state.get("user_email")
         store = _chat_store()
         if cid and cid in store:
+            _reset()
             del store[cid]
+            if email:
+                db_delete_chat(email, cid)
             if st.session_state.get("current_chat_id") == cid:
                 remaining = [c for c in store.values() if c.get("messages")]
                 if remaining:
-                    remaining.sort(key=lambda c: c.get("created", 0), reverse=True)
+                    remaining.sort(key=lambda c: c.get("updated", c.get("created", 0)), reverse=True)
                     st.session_state.current_chat_id = remaining[0]["id"]
                     st.session_state.messages = remaining[0]["messages"]
+                    st.session_state.chat_created = remaining[0].get("created", time.time())
                 else:
                     _create_current_chat()
+
     elif t == "login":
-        email = get_action_field(action, "email")
+        email = (get_action_field(action, "email") or "").strip().lower()
         if email:
+            _reset()
+            db_upsert_user(email)
             st.session_state.user_email = email
-            store = _chat_store()
-            if store:
-                most_recent = max(store.values(), key=lambda c: c.get("created", 0))
-                st.session_state.current_chat_id = most_recent["id"]
-                st.session_state.messages = most_recent["messages"]
-            else:
-                _create_current_chat()
+            st.session_state.pop("current_chat_id", None)
+            st.session_state.pop("messages", None)
+            init_ui_state()
+
     elif t == "logout":
+        _reset()
+        _persist_current_chat()
         st.session_state.user_email = None
-        store = _chat_store()
-        if store:
-            most_recent = max(store.values(), key=lambda c: c.get("created", 0))
-            st.session_state.current_chat_id = most_recent["id"]
-            st.session_state.messages = most_recent["messages"]
-        else:
-            _create_current_chat()
+        st.session_state.pop("current_chat_id", None)
+        st.session_state.pop("messages", None)
+        init_ui_state()
+
     elif t == "delete_all_chats":
-        key = st.session_state.get("user_email") or "__guest__"
-        st.session_state.chats_by_user[key] = {}
-        _create_current_chat()
+        _reset()
+        email = st.session_state.get("user_email")
+        if email:
+            db_delete_all_chats(email)
+        else:
+            st.session_state.guest_chats = {}
+        st.session_state.pop("current_chat_id", None)
+        st.session_state.pop("messages", None)
+        init_ui_state()
+
     elif t == "set_language":
         lang = get_action_field(action, "lang")
         if lang:
             st.session_state.language = lang
+            email = st.session_state.get("user_email")
+            if email:
+                db_set_settings(email, language=lang)
+
     elif t == "set_model":
         model = get_action_field(action, "model")
         if model:
             st.session_state.model_choice = model
+            email = st.session_state.get("user_email")
+            if email:
+                db_set_settings(email, model=model)
+
     st.rerun()
 
 
@@ -733,6 +897,8 @@ def render_ui():
         st.session_state.ui_factories[name] = components.component(
             name, html=build_ui_html(data_json), css=UI_CSS, js=UI_JS
         )
+        while len(st.session_state.ui_factories) > 10:
+            del st.session_state.ui_factories[next(iter(st.session_state.ui_factories))]
     comp = st.session_state.ui_factories[name]
     result = comp(key=f"strafe_ui_k_{h}", on_ui_action_change=lambda: None)
     if result:
@@ -811,10 +977,30 @@ SYSTEM = (
 SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 HISTORY_LIMIT = 30
 
+CELERIS_KEY = st.secrets.get("CELERIS_API_KEY")
+CELERIS_BASE_URL = st.secrets.get("CELERIS_BASE_URL", "")
+CELERIS_MODEL = st.secrets.get("CELERIS_MODEL", "")
+
+_celeris_client = None
+def get_celeris_client():
+    global _celeris_client
+    if _celeris_client is None:
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise RuntimeError("openai package not installed. Add openai>=1.40.0 to requirements.")
+        _celeris_client = OpenAI(api_key=CELERIS_KEY, base_url=CELERIS_BASE_URL)
+    return _celeris_client
+
+def celeris_ready():
+    return bool(CELERIS_KEY and CELERIS_BASE_URL and CELERIS_MODEL)
+
 
 def pick_model():
-    if "model" in st.session_state:
-        return st.session_state.model
+    if st.session_state.get("model_choice") == "celeris":
+        return CELERIS_MODEL
+    if "groq_model" in st.session_state:
+        return st.session_state.groq_model
     try:
         response = Groq(api_key=KEYS[0]).models.list()
         avail = {m.id if hasattr(m, 'id') else m[0] for m in response.data}
@@ -822,29 +1008,19 @@ def pick_model():
         avail = set()
     for p in PREFERRED:
         if p in avail:
-            st.session_state.model = p
+            st.session_state.groq_model = p
             return p
     safe_avail = avail & SAFE_MODELS
     if safe_avail:
         chosen = list(safe_avail)[0]
-        st.session_state.model = chosen
+        st.session_state.groq_model = chosen
         return chosen
     if avail:
         chosen = list(avail)[0]
-        st.session_state.model = chosen
+        st.session_state.groq_model = chosen
         return chosen
-    st.session_state.model = PREFERRED[0]
+    st.session_state.groq_model = PREFERRED[0]
     return PREFERRED[0]
-
-
-def get_working_key():
-    if "failed_keys" not in st.session_state:
-        st.session_state.failed_keys = set()
-    available = [k for k in KEYS if k not in st.session_state.failed_keys]
-    if not available:
-        st.session_state.failed_keys.clear()
-        available = KEYS
-    return random.choice(available)
 
 
 def mark_key_failed(key):
@@ -872,8 +1048,8 @@ def web_search(query, num_results=3):
         return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. Tell the user."}]
 
 
-def msg_to_api(m, distance_from_latest=None, full_res=False):
-    imgs = m.get("images") or []
+def msg_to_api(m, distance_from_latest=None, full_res=False, strip_images=False):
+    imgs = [] if strip_images else (m.get("images") or [])
     files = m.get("files") or []
     has_media = bool(imgs or files)
     if not has_media:
@@ -902,6 +1078,8 @@ def msg_to_api(m, distance_from_latest=None, full_res=False):
 def build_payload(history):
     model = pick_model()
     msgs = [{"role": "system", "content": SYSTEM}] + history
+    if st.session_state.get("model_choice") == "celeris":
+        return dict(model=model, messages=msgs, max_tokens=1024, temperature=0.7)
     kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
     if "qwen" in model.lower():
         kw["reasoning_format"] = "parsed"
@@ -912,17 +1090,15 @@ def build_payload(history):
 
 
 def call_groq_with_retry(kwargs):
-    tried = set()
+    if "failed_keys" not in st.session_state:
+        st.session_state.failed_keys = set()
+    pool = [k for k in KEYS if k not in st.session_state.failed_keys] or list(KEYS)
     last_err = None
-    while len(tried) < len(KEYS):
-        key = get_working_key()
-        if key in tried:
-            continue
-        tried.add(key)
+    for key in random.sample(pool, len(pool)):
         try:
             return Groq(api_key=key).chat.completions.create(**kwargs), None
         except NotFoundError:
-            st.session_state.pop("model", None)
+            st.session_state.pop("groq_model", None)
             mark_key_failed(key)
             last_err = "model gone"
             continue
@@ -936,6 +1112,13 @@ def call_groq_with_retry(kwargs):
 
 
 def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=False):
+    use_celeris = st.session_state.get("model_choice") == "celeris"
+    if use_celeris and not celeris_ready():
+        raise RuntimeError("Celeris not configured. Add CELERIS_API_KEY, CELERIS_BASE_URL, CELERIS_MODEL to secrets.")
+    if use_celeris and use_search:
+        st.toast("Celeris doesn't support search - disabled for this message")
+        use_search = False
+
     t0 = time.time()
     if look_back or clearer_image_back:
         slice_msgs = st.session_state.messages
@@ -945,7 +1128,8 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
     history = []
     for idx, m in enumerate(slice_msgs):
         distance = total - 1 - idx
-        history.append(msg_to_api(m, distance_from_latest=distance, full_res=clearer_image_back))
+        history.append(msg_to_api(m, distance_from_latest=distance, full_res=clearer_image_back, strip_images=use_celeris))
+
     tools = None
     if use_search:
         tools = [{
@@ -965,23 +1149,39 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
                 }
             }
         }]
+
     max_rounds = 5 if use_search else 1
     tool_calls_made = 0
     last_err = None
+    last_round_had_tool_call = False
+
     for round_idx in range(max_rounds):
         kwargs = build_payload(history)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "required" if round_idx == 0 and tool_calls_made == 0 else "auto"
-        r, err = call_groq_with_retry(kwargs)
+
+        if use_celeris:
+            try:
+                r = get_celeris_client().chat.completions.create(**kwargs)
+                err = None
+            except Exception as e:
+                r = None
+                err = str(e)[:120]
+        else:
+            r, err = call_groq_with_retry(kwargs)
+
         if r is None:
             last_err = err
             break
+
         msg = r.choices[0].message
         if tools and getattr(msg, "tool_calls", None):
             tool_calls_made += len(msg.tool_calls)
             if tool_calls_made > 5:
                 raise RuntimeError("Max tool rounds exceeded")
+            if round_idx == max_rounds - 1:
+                last_round_had_tool_call = True
             assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
             for tc in msg.tool_calls:
                 assistant_msg["tool_calls"].append({
@@ -1012,6 +1212,9 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
                 "think": use_think,
                 "reasoning": reasoning if use_think else None
             }
+
+    if last_round_had_tool_call:
+        raise RuntimeError("Model kept calling tools without producing a final answer")
     raise RuntimeError(last_err or "All API keys failed")
 
 
@@ -1042,16 +1245,16 @@ if act:
             st.session_state.messages.append({"role": "assistant", **result})
         except Exception as e:
             st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}", "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": False, "think": False, "reasoning": None})
-        st.session_state["show"] = None
+        _persist_current_chat()
         st.rerun()
     elif kind == "edit":
         st.session_state["editing"] = i
-        st.session_state["show"] = None
-    elif kind == "close":
-        st.session_state["show"] = None
 
 pending = st.session_state.pop("pending", None)
 if pending is not None:
+    if st.session_state.get("editing") is not None:
+        st.session_state["editing"] = None
+        st.toast("Edit cancelled - message sent instead")
     text = pending.get("text", "") if isinstance(pending, dict) else pending
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
@@ -1067,9 +1270,9 @@ if pending is not None:
     except Exception as e:
         st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}", "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": None})
     st.session_state["editing"] = None
+    _persist_current_chat()
     st.rerun()
 
-show = st.session_state.get("show")
 editing = st.session_state.get("editing")
 
 for i, m in enumerate(st.session_state.messages):
@@ -1081,6 +1284,7 @@ for i, m in enumerate(st.session_state.messages):
                 if st.button("Save", key=f"sv{i}"):
                     st.session_state.messages[:] = st.session_state.messages[:i]
                     st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False), "images": m.get("images", []), "files": m.get("files", [])}
+                    st.session_state["editing"] = None
                     st.rerun()
             with sk:
                 if st.button("Cancel", key=f"cx{i}"):
