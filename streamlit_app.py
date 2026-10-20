@@ -878,10 +878,14 @@ SYSTEM = (
     "I match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\n"
     "I hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\n"
     "You are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple.\n\n"
-    "CRITICAL: Your internal training data ends in early 2025. If the user asks about recent events, news, prices, sports scores, or anything time-sensitive, YOU MUST USE the web_search TOOL. Do not guess and do not announce that you are searching \u2014 just search and answer."
+    "CRITICAL TOOL RULES:\n"
+    "1. Your training data ends early 2025. Use web_search for anything time-sensitive.\n"
+    "2. NEVER call web_search more than ONCE per user message. After receiving search results, you MUST provide a final answer immediately.\n"
+    "3. Do not refine queries or search again if the first result is insufficient. Answer with what you have and note limitations.\n"
+    "4. Do not announce that you are searching. Just do it."
 )
-SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
-HISTORY_LIMIT = 30
+SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama-3.3-70b-versatile"}
+HISTORY_LIMIT = 15
 
 CELERIS_KEY = st.secrets.get("CELERIS_API_KEY")
 CELERIS_BASE_URL = st.secrets.get("CELERIS_BASE_URL", "")
@@ -1039,7 +1043,7 @@ def build_payload(history):
     msgs = [{"role": "system", "content": SYSTEM}] + history
     if st.session_state.get("model_choice") == "celeris":
         return dict(model=model, messages=msgs, max_tokens=1024, temperature=0.7)
-    kw = dict(model=model, messages=msgs, max_completion_tokens=1024, temperature=0.7)
+    kw = dict(model=model, messages=msgs, max_completion_tokens=2048, temperature=0.7)
     if "qwen" in model.lower():
         kw["reasoning_format"] = "parsed"
     elif "gpt-oss" in model.lower():
@@ -1109,7 +1113,7 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
             }
         }]
 
-    max_rounds = 5 if use_search else 1
+    max_rounds = 2 if use_search else 1
     tool_calls_made = 0
     last_err = None
     last_round_had_tool_call = False
@@ -1136,10 +1140,9 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
         msg = r.choices[0].message
         if tools and getattr(msg, "tool_calls", None):
             tool_calls_made += len(msg.tool_calls)
-            if tool_calls_made > 5:
-                raise RuntimeError("Max tool rounds exceeded")
-            if round_idx == max_rounds - 1:
+            if tool_calls_made > 1:
                 last_round_had_tool_call = True
+                break
             assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
             for tc in msg.tool_calls:
                 assistant_msg["tool_calls"].append({
@@ -1176,7 +1179,7 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
             }
 
     if last_round_had_tool_call:
-        raise RuntimeError("Model kept calling tools without producing a final answer")
+        raise RuntimeError("Model tried to search more than once - refused to answer")
     raise RuntimeError(last_err or "All API keys failed")
 
 
