@@ -6,6 +6,9 @@ from datetime import datetime
 from pathlib import Path
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException
+from curl_cffi import requests as cffi_requests
+from bs4 import BeautifulSoup
+from urllib.parse import quote, unquote
 
 st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercontent.com/let7829/Strafe-ai/refs/heads/main/logo.png", layout="centered")
 
@@ -14,6 +17,7 @@ MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 PLUS_GLYPH = "\uff0b"
 
+GUEST_KEY = "__guest__"
 DB_PATH = Path(os.environ.get("STRAFE_DB", "strafe.db"))
 
 def _db():
@@ -24,10 +28,6 @@ def _db():
 def db_init():
     with _db() as c:
         c.executescript("""
-            CREATE TABLE IF NOT EXISTS users (
-                email TEXT PRIMARY KEY,
-                created REAL NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS chats (
                 id TEXT PRIMARY KEY,
                 email TEXT NOT NULL,
@@ -43,10 +43,6 @@ def db_init():
                 model TEXT NOT NULL DEFAULT 'groq'
             );
         """)
-
-def db_upsert_user(email):
-    with _db() as c:
-        c.execute("INSERT OR IGNORE INTO users(email, created) VALUES(?, ?)", (email, time.time()))
 
 def db_get_chats(email):
     with _db() as c:
@@ -106,9 +102,9 @@ def db_set_settings(email, language=None, model=None):
 
 db_init()
 
-INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
+INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
 INPUT_CSS = """
-#bar{position:fixed;bottom:16px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
+#bar{position:fixed;bottom:8px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
 #atts{display:flex;gap:8px;width:100%;max-width:760px;flex-wrap:wrap;padding-left:4px;box-sizing:border-box;}
 #atts:empty{display:none;}
 .att{position:relative;width:56px;height:56px;border-radius:12px;overflow:hidden;border:1px solid #2a2a2a;flex-shrink:0;}
@@ -160,7 +156,7 @@ export default function(component){
     const camCapture=parentElement.querySelector('#cam-capture');
     const camCanvas=parentElement.querySelector('#cam-canvas');
     if(!input||!btn)return;
-    let searchActive=false;
+    let searchActive=true;
     let thinkActive=false;
     let attachments=[];
     let fileAttachments=[];
@@ -261,10 +257,6 @@ export default function(component){
         attachments.push(resized);
         renderAtts();
     }
-    function updateLabels(){
-        btnSearch.querySelector('.label').textContent=searchActive?'Searching':'Search';
-        btnThink.querySelector('.label').textContent=thinkActive?'Thinking':'Think';
-    }
     async function send(){
         const val=input.value.trim();
         if(!val&&!attachments.length&&!fileAttachments.length)return;
@@ -342,13 +334,12 @@ export default function(component){
     btnSearch.onclick=function(){
         searchActive=!searchActive;
         this.classList.toggle('active',searchActive);
-        updateLabels();
     };
     btnThink.onclick=function(){
         thinkActive=!thinkActive;
         this.classList.toggle('active',thinkActive);
-        updateLabels();
     };
+    btnSearch.classList.toggle('active',searchActive);
 }
 """
 
@@ -360,8 +351,6 @@ UI_CSS = """
 .tb-btn{height:36px;min-width:36px;border-radius:18px;border:1px solid #2a2a2a;background:#1a1a1a;color:#bdbdbd;font-size:0.9rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;padding:0 14px;display:flex;align-items:center;justify-content:center;gap:6px;transition:all 0.2s;box-shadow:0 2px 10px rgba(0,0,0,0.4);}
 .tb-btn:hover{color:#fff;border-color:#4f8dff;}
 #menu-btn{font-size:1.15rem;padding:0;width:36px;}
-#account-btn{font-size:0.82rem;color:#8a8a8a;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-#account-btn:hover{color:#fff;}
 #sidebar-backdrop{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.55);z-index:1000000;opacity:0;pointer-events:none;transition:opacity 0.2s;}
 #sidebar-backdrop.open{opacity:1;pointer-events:auto;}
 #sidebar{position:fixed;top:0;left:0;width:300px;max-width:86vw;height:100vh;background:#101010;border-right:1px solid #2a2a2a;z-index:1000001;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform 0.25s ease;font-family:'Space Grotesk',sans-serif;}
@@ -418,17 +407,12 @@ UI_CSS = """
 .radio-title .badge{color:#4f8dff;font-size:0.7rem;font-weight:600;margin-left:6px;}
 .radio-desc{font-size:0.76rem;color:#7a7a7a;margin-top:3px;line-height:1.45;}
 .about-text{color:#bdbdbd;font-size:0.88rem;line-height:1.65;padding:2px 0 8px 0;}
-.account-info{color:#bdbdbd;font-size:0.88rem;line-height:1.55;padding:4px 0 12px 0;}
 .modal{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.72);z-index:1000010;display:none;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;font-family:'Space Grotesk',sans-serif;backdrop-filter:blur(4px);}
 .modal.open{display:flex;}
 .modal-content{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
 .modal-title{font-size:1.15rem;color:#fff;font-weight:600;margin:0 0 8px 0;}
 .modal-text{font-size:0.88rem;color:#8a8a8a;line-height:1.55;margin:0 0 20px 0;}
-.modal-input{width:100%;height:44px;border-radius:10px;border:1px solid #2a2a2a;background:#0a0a0a;color:#fff;font-size:0.95rem;padding:0 14px;font-family:'Space Grotesk',sans-serif;box-sizing:border-box;margin-bottom:16px;outline:none;transition:border-color 0.2s;}
-.modal-input:focus{border-color:#4f8dff;}
 .modal-btn{width:100%;height:44px;border-radius:10px;border:none;font-size:0.95rem;font-family:'Space Grotesk',sans-serif;cursor:pointer;margin-bottom:8px;transition:all 0.2s;font-weight:500;}
-.modal-btn.primary{background:#4f8dff;color:#fff;}
-.modal-btn.primary:hover{background:#3a7ae0;}
 .modal-btn.secondary{background:#1a1a1a;color:#bdbdbd;border:1px solid #2a2a2a;}
 .modal-btn.secondary:hover{background:#222;color:#fff;}
 .modal-btn.danger{background:#ff5555;color:#fff;}
@@ -445,18 +429,15 @@ export default function(component){
     const DATA=JSON.parse(dataEl.textContent);
     function getLS(k,d){try{return localStorage.getItem(k)||d;}catch(e){return d;}}
     function setLS(k,v){try{localStorage.setItem(k,v);}catch(e){}}
-    let ui={sidebarOpen:getLS('strafe_sidebar','0')==='1',settingsOpen:getLS('strafe_settings','0')==='1',tab:getLS('strafe_tab','account')};
+    let savedTab=getLS('strafe_tab','language');
+    if(savedTab==='account')savedTab='language';
+    let ui={sidebarOpen:getLS('strafe_sidebar','0')==='1',settingsOpen:getLS('strafe_settings','0')==='1',tab:savedTab};
     function saveUI(){setLS('strafe_sidebar',ui.sidebarOpen?'1':'0');setLS('strafe_settings',ui.settingsOpen?'1':'0');setLS('strafe_tab',ui.tab);}
-    const isLoggedIn=!!DATA.user;
-    const $accountBtn=$('#account-btn');
-    $accountBtn.textContent=isLoggedIn?DATA.user:'Guest, @no_email.gmail.com';
     const $sidebar=$('#sidebar');
     const $sidebarBackdrop=$('#sidebar-backdrop');
     const $chatList=$('#chat-list');
     const $settingsPanel=$('#settings-panel');
     const $settingsBackdrop=$('#settings-backdrop');
-    const $loginModal=$('#login-modal');
-    const $loginEmail=$('#login-email');
     const $confirmModal=$('#confirm-modal');
     const $confirmTitle=$('#confirm-title');
     const $confirmText=$('#confirm-text');
@@ -466,7 +447,14 @@ export default function(component){
     function openSettings(){ui.settingsOpen=true;saveUI();applySettings();}
     function closeSettings(){ui.settingsOpen=false;saveUI();applySettings();}
     function applySettings(){$settingsPanel.classList.toggle('open',ui.settingsOpen);$settingsBackdrop.classList.toggle('open',ui.settingsOpen);}
-    function selectTab(t){ui.tab=t;saveUI();$$('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));$$('.tab-content').forEach(el=>el.classList.toggle('active',el.dataset.tabContent===t));}
+    function selectTab(t){
+        const valid=['language','models','about'];
+        if(!valid.includes(t))t='language';
+        ui.tab=t;
+        saveUI();
+        $$('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));
+        $$('.tab-content').forEach(el=>el.classList.toggle('active',el.dataset.tabContent===t));
+    }
     $$('.tab').forEach(el=>el.addEventListener('click',()=>selectTab(el.dataset.tab)));
     let confirmCallback=null;
     function showConfirm(title,text,cb){$confirmTitle.textContent=title;$confirmText.textContent=text;confirmCallback=cb;$confirmModal.classList.add('open');}
@@ -557,26 +545,6 @@ export default function(component){
             $modelList.appendChild(item);
         });
     }
-    function renderAccount(){
-        const $accountInfo=$('#account-info');
-        const $logoutBtn=$('#logout-btn');
-        $accountInfo.textContent=isLoggedIn?('Signed in as '+DATA.user):'You are browsing as a guest. Sign in to save chats and settings.';
-        $logoutBtn.style.display=isLoggedIn?'flex':'none';
-    }
-    function openLogin(){$loginEmail.value='';$loginModal.classList.add('open');setTimeout(()=>$loginEmail.focus(),100);}
-    function closeLogin(){$loginModal.classList.remove('open');}
-    $('#login-submit').onclick=()=>{
-        const email=$loginEmail.value.trim();
-        if(!email||!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)){$loginEmail.style.borderColor='#ff5555';return;}
-        closeLogin();
-        setTriggerValue('ui_action',{type:'login',email:email});
-    };
-    $('#login-cancel').onclick=closeLogin;
-    $loginEmail.onkeydown=(e)=>{
-        if(e.key==='Enter')$('#login-submit').click();
-        else if(e.key==='Escape')closeLogin();
-        else $loginEmail.style.borderColor='';
-    };
     $('#menu-btn').onclick=openSidebar;
     $('#sidebar-close').onclick=closeSidebar;
     $sidebarBackdrop.onclick=closeSidebar;
@@ -584,8 +552,6 @@ export default function(component){
     $('#settings-btn').onclick=()=>{closeSidebar();openSettings();};
     $('#settings-close').onclick=closeSettings;
     $settingsBackdrop.onclick=closeSettings;
-    $accountBtn.onclick=()=>{if(isLoggedIn){openSettings();selectTab('account');}else{openLogin();}};
-    $('#logout-btn').onclick=()=>{closeSettings();setTriggerValue('ui_action',{type:'logout'});};
     $('#delete-all-btn').onclick=()=>{
         showConfirm('Delete all chats?','Are you sure you want to delete ALL chats? This cannot be undone.',()=>{
             closeConfirm();
@@ -598,7 +564,6 @@ export default function(component){
     renderChats();
     renderLanguages();
     renderModels();
-    renderAccount();
     selectTab(ui.tab);
 }
 """
@@ -608,7 +573,6 @@ def build_ui_html(data_json):
     parts = [
         '<div id="topbar">',
         '  <button id="menu-btn" class="tb-btn" type="button">&#9776;</button>',
-        '  <button id="account-btn" class="tb-btn" type="button"></button>',
         '</div>',
         '<div id="sidebar-backdrop"></div>',
         '<aside id="sidebar">',
@@ -629,20 +593,11 @@ def build_ui_html(data_json):
         '    <button id="settings-close" class="icon-x" type="button">&#10005;</button>',
         '  </div>',
         '  <div class="tabs">',
-        '    <button class="tab active" data-tab="account" type="button">Account</button>',
-        '    <button class="tab" data-tab="language" type="button">Language</button>',
+        '    <button class="tab active" data-tab="language" type="button">Language</button>',
         '    <button class="tab" data-tab="models" type="button">Models/Operators</button>',
         '    <button class="tab" data-tab="about" type="button">About</button>',
         '  </div>',
-        '  <div class="tab-content active" data-tab-content="account">',
-        '    <div class="setting-section">',
-        '      <div class="setting-label">Account</div>',
-        '      <div class="account-info" id="account-info"></div>',
-        '      <button class="setting-btn" id="logout-btn" type="button">Log out</button>',
-        '      <button class="setting-btn danger" id="delete-all-btn" type="button">Delete all chats</button>',
-        '    </div>',
-        '  </div>',
-        '  <div class="tab-content" data-tab-content="language">',
+        '  <div class="tab-content active" data-tab-content="language">',
         '    <div class="setting-section">',
         '      <div class="setting-label">Language</div>',
         '      <div id="lang-list"></div>',
@@ -659,17 +614,12 @@ def build_ui_html(data_json):
         '      <div class="setting-label">About</div>',
         '      <div class="about-text">Strafe is a project made for you\'re use, no data can be seen by anyone even by owner.</div>',
         '    </div>',
+        '    <div class="setting-section">',
+        '      <div class="setting-label">Danger Zone</div>',
+        '      <button class="setting-btn danger" id="delete-all-btn" type="button">Delete all chats</button>',
+        '    </div>',
         '  </div>',
         '</aside>',
-        '<div id="login-modal" class="modal">',
-        '  <div class="modal-content">',
-        '    <h2 class="modal-title">Sign in</h2>',
-        '    <p class="modal-text">Enter your email to save chats and settings.</p>',
-        '    <input type="email" id="login-email" class="modal-input" placeholder="you@example.com"/>',
-        '    <button id="login-submit" class="modal-btn primary" type="button">Continue</button>',
-        '    <button id="login-cancel" class="modal-btn secondary" type="button">Cancel</button>',
-        '  </div>',
-        '</div>',
         '<div id="confirm-modal" class="modal">',
         '  <div class="modal-content">',
         '    <h2 class="modal-title" id="confirm-title">Delete chat?</h2>',
@@ -684,12 +634,9 @@ def build_ui_html(data_json):
 
 
 def _chat_store():
-    email = st.session_state.get("user_email")
-    if not email:
-        if "guest_chats" not in st.session_state:
-            st.session_state.guest_chats = {}
-        return st.session_state.guest_chats
-    return db_get_chats(email)
+    if "guest_chats" not in st.session_state:
+        st.session_state.guest_chats = db_get_chats(GUEST_KEY)
+    return st.session_state.guest_chats
 
 
 def _create_new_chat_id():
@@ -701,8 +648,7 @@ def _create_current_chat():
     to_remove = [cid for cid, c in store.items() if not c.get("messages")]
     for cid in to_remove:
         del store[cid]
-        if st.session_state.get("user_email"):
-            db_delete_chat(st.session_state.user_email, cid)
+        db_delete_chat(GUEST_KEY, cid)
     cid = _create_new_chat_id()
     msgs = []
     chat = {"id": cid, "title": "New chat", "messages": msgs, "created": time.time(), "updated": time.time()}
@@ -713,9 +659,6 @@ def _create_current_chat():
 
 
 def _persist_current_chat():
-    email = st.session_state.get("user_email")
-    if not email:
-        return
     msgs = st.session_state.get("messages", [])
     if not msgs:
         return
@@ -731,7 +674,7 @@ def _persist_current_chat():
         "created": st.session_state.get("chat_created", time.time()),
         "updated": time.time(),
     }
-    db_save_chat(email, chat)
+    db_save_chat(GUEST_KEY, chat)
 
 
 def _get_chat_summaries():
@@ -751,17 +694,9 @@ def _get_chat_summaries():
 
 
 def init_ui_state():
-    if "user_email" not in st.session_state:
-        st.session_state.user_email = None
-
-    email = st.session_state.get("user_email")
-    if email:
-        s = db_get_settings(email)
-        st.session_state.language = s["language"]
-        st.session_state.model_choice = s["model"]
-    else:
-        st.session_state.setdefault("language", "en")
-        st.session_state.setdefault("model_choice", "groq")
+    s = db_get_settings(GUEST_KEY)
+    st.session_state.setdefault("language", s["language"])
+    st.session_state.setdefault("model_choice", s["model"])
 
     store = _chat_store()
     cid = st.session_state.get("current_chat_id")
@@ -810,13 +745,11 @@ def handle_action(action):
 
     elif t == "delete_chat":
         cid = get_action_field(action, "chat_id")
-        email = st.session_state.get("user_email")
         store = _chat_store()
         if cid and cid in store:
             _reset()
             del store[cid]
-            if email:
-                db_delete_chat(email, cid)
+            db_delete_chat(GUEST_KEY, cid)
             if st.session_state.get("current_chat_id") == cid:
                 remaining = [c for c in store.values() if c.get("messages")]
                 if remaining:
@@ -827,31 +760,10 @@ def handle_action(action):
                 else:
                     _create_current_chat()
 
-    elif t == "login":
-        email = (get_action_field(action, "email") or "").strip().lower()
-        if email:
-            _reset()
-            db_upsert_user(email)
-            st.session_state.user_email = email
-            st.session_state.pop("current_chat_id", None)
-            st.session_state.pop("messages", None)
-            init_ui_state()
-
-    elif t == "logout":
-        _reset()
-        _persist_current_chat()
-        st.session_state.user_email = None
-        st.session_state.pop("current_chat_id", None)
-        st.session_state.pop("messages", None)
-        init_ui_state()
-
     elif t == "delete_all_chats":
         _reset()
-        email = st.session_state.get("user_email")
-        if email:
-            db_delete_all_chats(email)
-        else:
-            st.session_state.guest_chats = {}
+        db_delete_all_chats(GUEST_KEY)
+        st.session_state.guest_chats = {}
         st.session_state.pop("current_chat_id", None)
         st.session_state.pop("messages", None)
         init_ui_state()
@@ -860,29 +772,23 @@ def handle_action(action):
         lang = get_action_field(action, "lang")
         if lang:
             st.session_state.language = lang
-            email = st.session_state.get("user_email")
-            if email:
-                db_set_settings(email, language=lang)
+            db_set_settings(GUEST_KEY, language=lang)
 
     elif t == "set_model":
         model = get_action_field(action, "model")
         if model:
             st.session_state.model_choice = model
-            email = st.session_state.get("user_email")
-            if email:
-                db_set_settings(email, model=model)
+            db_set_settings(GUEST_KEY, model=model)
 
     st.rerun()
 
 
 def render_ui():
-    user = st.session_state.get("user_email")
     chats = _get_chat_summaries()
     current_cid = st.session_state.get("current_chat_id")
     lang = st.session_state.get("language", "en")
     model = st.session_state.get("model_choice", "groq")
     data = {
-        "user": user,
         "chats": chats,
         "current_chat_id": current_cid,
         "language": lang,
@@ -972,7 +878,7 @@ SYSTEM = (
     "I match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\n"
     "I hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\n"
     "You are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple.\n\n"
-    "CRITICAL: Your internal training data ends in early 2025. If the user asks about recent events, YOU MUST USE the web_search TOOL. Do not guess."
+    "CRITICAL: Your internal training data ends in early 2025. If the user asks about recent events, news, prices, sports scores, or anything time-sensitive, YOU MUST USE the web_search TOOL. Do not guess and do not announce that you are searching \u2014 just search and answer."
 )
 SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 HISTORY_LIMIT = 30
@@ -1029,27 +935,80 @@ def mark_key_failed(key):
     st.session_state.failed_keys.add(key)
 
 
+def _search_fallback(query, num_results, reason):
+    backends = ["lite", "html", "auto", "duckduckgo", "google", "bing", "mojeek", "brave"]
+    last_err = reason
+    for b in backends:
+        try:
+            out = []
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=num_results, backend=b):
+                    link = r.get("href") or r.get("url") or ""
+                    snippet = r.get("body") or r.get("snippet") or ""
+                    title = r.get("title") or ""
+                    if link or snippet:
+                        out.append({"title": title, "link": link, "snippet": snippet})
+            if out:
+                return out
+        except DDGSException as e:
+            last_err = f"{b}: {e}"
+            time.sleep(0.3)
+            continue
+        except Exception as e:
+            last_err = f"{b}: {e}"
+            continue
+    return [{
+        "title": "Search unavailable",
+        "link": "",
+        "snippet": (
+            f"All search backends are rate limited right now ({last_err}). "
+            "Tell the user you cannot search at the moment, answer from your training "
+            "data with a clear caveat that info may be outdated, and suggest they retry in a minute."
+        ),
+    }]
+
+
 def web_search(query, num_results=3):
+    url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
     try:
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=num_results, backend="brave,google,duckduckgo"):
-                results.append({
-                    "title": r.get("title", ""),
-                    "link": r.get("href", ""),
-                    "snippet": r.get("body", "")
-                })
-        if not results:
-            return [{"title": "No results", "link": "", "snippet": "Search returned empty. Tell the user."}]
-        return results
-    except DDGSException:
-        return [{"title": "Rate Limited", "link": "", "snippet": "Rate limit reached. Tell the user."}]
+        r = cffi_requests.get(
+            url,
+            impersonate="chrome124",
+            timeout=15,
+            headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://duckduckgo.com/",
+            },
+        )
+        if r.status_code == 200 and "challenge" not in r.text.lower()[:500]:
+            soup = BeautifulSoup(r.text, "html.parser")
+            results = []
+            for a in soup.select("a.result__a")[:num_results]:
+                href = a.get("href", "")
+                if href.startswith("//duckduckgo.com/l/?uddg="):
+                    try:
+                        href = unquote(href.split("uddg=", 1)[1].split("&", 1)[0])
+                    except Exception:
+                        pass
+                title = a.get_text(strip=True)
+                parent = a.find_parent("div", class_="result")
+                snippet = ""
+                if parent:
+                    sn = parent.select_one(".result__snippet")
+                    if sn:
+                        snippet = sn.get_text(strip=True)
+                if href or snippet:
+                    results.append({"title": title, "link": href, "snippet": snippet})
+            if results:
+                return results
+            return _search_fallback(query, num_results, "empty DDG results")
+        return _search_fallback(query, num_results, f"DDG status {r.status_code}")
     except Exception as e:
-        return [{"title": "Error", "link": "", "snippet": f"Search failed: {str(e)}. Tell the user."}]
+        return _search_fallback(query, num_results, str(e)[:80])
 
 
-def msg_to_api(m, distance_from_latest=None, full_res=False, strip_images=False):
-    imgs = [] if strip_images else (m.get("images") or [])
+def msg_to_api(m, distance_from_latest=None, full_res=False):
+    imgs = m.get("images") or []
     files = m.get("files") or []
     has_media = bool(imgs or files)
     if not has_media:
@@ -1128,7 +1087,7 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
     history = []
     for idx, m in enumerate(slice_msgs):
         distance = total - 1 - idx
-        history.append(msg_to_api(m, distance_from_latest=distance, full_res=clearer_image_back, strip_images=use_celeris))
+        history.append(msg_to_api(m, distance_from_latest=distance, full_res=clearer_image_back))
 
     tools = None
     if use_search:
@@ -1136,7 +1095,7 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web for current info. DO NOT fake the search. If search returns 'No results', tell the user.",
+                "description": "Search the web for current info. Use this for recent events, news, prices, sports, or anything time-sensitive. DO NOT fake the search. If search returns 'No results', tell the user.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1159,7 +1118,6 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
         kwargs = build_payload(history)
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "required" if round_idx == 0 and tool_calls_made == 0 else "auto"
 
         if use_celeris:
             try:
@@ -1192,8 +1150,12 @@ def ask(use_search=False, use_think=False, look_back=False, clearer_image_back=F
             history.append(assistant_msg)
             for tc in msg.tool_calls:
                 if tc.function.name == "web_search":
-                    args = json.loads(tc.function.arguments)
-                    results = web_search(args.get("query", ""))
+                    try:
+                        args = json.loads(tc.function.arguments)
+                        query = args.get("query", "") if isinstance(args, dict) else ""
+                    except Exception:
+                        query = ""
+                    results = web_search(query)
                     context = "\n".join(f"{res['title']}: {res['snippet']} ({res['link']})" for res in results)
                     history.append({"role": "tool", "tool_call_id": tc.id, "content": context})
             continue
