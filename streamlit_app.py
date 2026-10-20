@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
-import random, time, html as H, json, uuid, os, sqlite3
+import random, time, html as H, json, uuid, os, sqlite3, hashlib
 from datetime import datetime
 from pathlib import Path
 from ddgs import DDGS
