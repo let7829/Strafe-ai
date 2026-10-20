@@ -1,14 +1,16 @@
+
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
-import random, time, html as H, json, uuid, os, sqlite3, hashlib
-from datetime import datetime
+import random, time, html as H, json, uuid, os, sqlite3, hashlib, secrets, string
+from datetime import datetime, timedelta
 from pathlib import Path
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException
 from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote, unquote
+import extra_streamlit_components as stx
 
 st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercontent.com/let7829/Strafe-ai/refs/heads/main/logo.png", layout="centered")
 
@@ -17,8 +19,12 @@ MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 PLUS_GLYPH = "\uff0b"
 
-GUEST_KEY = "__guest__"
 DB_PATH = Path(os.environ.get("STRAFE_DB", "strafe.db"))
+COOKIE_KEY = "strafe_session_key"
+LOGIN_COOLDOWN = 5
+MAX_FAILED_ATTEMPTS = 5
+FAILED_WINDOW = 600
+BAN_DURATION = 900
 
 def _db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -30,25 +36,116 @@ def db_init():
         c.executescript("""
             CREATE TABLE IF NOT EXISTS chats (
                 id TEXT PRIMARY KEY,
-                email TEXT NOT NULL,
+                session_key_hash TEXT NOT NULL,
                 title TEXT NOT NULL,
                 messages TEXT NOT NULL,
                 created REAL NOT NULL,
                 updated REAL NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_chats_email_updated ON chats(email, updated DESC);
+            CREATE INDEX IF NOT EXISTS idx_chats_key_updated ON chats(session_key_hash, updated DESC);
             CREATE TABLE IF NOT EXISTS settings (
-                email TEXT PRIMARY KEY,
+                session_key_hash TEXT PRIMARY KEY,
                 language TEXT NOT NULL DEFAULT 'en',
                 model TEXT NOT NULL DEFAULT 'groq'
             );
+            CREATE TABLE IF NOT EXISTS valid_keys (
+                key_hash TEXT PRIMARY KEY,
+                created REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ip_bans (
+                ip TEXT PRIMARY KEY,
+                ban_until REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                attempted_at REAL NOT NULL,
+                success INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_ip_time ON login_attempts(ip, attempted_at);
         """)
 
-def db_get_chats(email):
+def hash_key(key):
+    return hashlib.sha256(key.encode()).hexdigest()
+
+def generate_key():
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(8))
+
+def get_client_ip():
+    try:
+        headers = st.context.headers
+        xff = headers.get("X-Forwarded-For")
+        if xff:
+            ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
+            if ips:
+                return ips[-1]
+        real_ip = headers.get("X-Real-Ip")
+        if real_ip and real_ip.strip():
+            return real_ip.strip()
+        return None
+    except:
+        return None
+
+def is_ip_banned(ip):
+    if not ip:
+        return False
+    with _db() as c:
+        row = c.execute("SELECT ban_until FROM ip_bans WHERE ip=?", (ip,)).fetchone()
+    if row and row["ban_until"] > time.time():
+        return True
+    if row and row["ban_until"] <= time.time():
+        with _db() as c:
+            c.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
+    return False
+
+def record_login_attempt(ip, success):
+    if not ip:
+        return
+    now = time.time()
+    with _db() as c:
+        c.execute("INSERT INTO login_attempts(ip, attempted_at, success) VALUES(?, ?, ?)", (ip, now, 1 if success else 0))
+        cutoff = now - FAILED_WINDOW
+        c.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (cutoff,))
+        if not success:
+            failed_count = c.execute(
+                "SELECT COUNT(*) FROM login_attempts WHERE ip=? AND attempted_at > ? AND success=0",
+                (ip, now - FAILED_WINDOW)
+            ).fetchone()[0]
+            if failed_count >= MAX_FAILED_ATTEMPTS:
+                ban_until = now + BAN_DURATION
+                c.execute("INSERT OR REPLACE INTO ip_bans(ip, ban_until) VALUES(?, ?)", (ip, ban_until))
+
+def check_login_cooldown(ip):
+    if not ip:
+        return 0
+    with _db() as c:
+        row = c.execute(
+            "SELECT attempted_at FROM login_attempts WHERE ip=? ORDER BY attempted_at DESC LIMIT 1",
+            (ip,)
+        ).fetchone()
+    if row:
+        elapsed = time.time() - row["attempted_at"]
+        if elapsed < LOGIN_COOLDOWN:
+            return LOGIN_COOLDOWN - elapsed
+    return 0
+
+def validate_key(key):
+    key_hash = hash_key(key)
+    with _db() as c:
+        row = c.execute("SELECT 1 FROM valid_keys WHERE key_hash=?", (key_hash,)).fetchone()
+    return row is not None
+
+def create_key(key):
+    key_hash = hash_key(key)
+    with _db() as c:
+        c.execute("INSERT OR IGNORE INTO valid_keys(key_hash, created) VALUES(?, ?)", (key_hash, time.time()))
+
+def db_get_chats(session_key_hash):
     with _db() as c:
         rows = c.execute(
-            "SELECT id, title, messages, created, updated FROM chats WHERE email=? ORDER BY updated DESC",
-            (email,),
+            "SELECT id, title, messages, created, updated FROM chats WHERE session_key_hash=? ORDER BY updated DESC",
+            (session_key_hash,),
         ).fetchall()
     out = {}
     for r in rows:
@@ -61,46 +158,124 @@ def db_get_chats(email):
         }
     return out
 
-def db_save_chat(email, chat):
+def db_save_chat(session_key_hash, chat):
     with _db() as c:
         c.execute(
-            """INSERT INTO chats(id, email, title, messages, created, updated)
+            """INSERT INTO chats(id, session_key_hash, title, messages, created, updated)
                VALUES(?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  title=excluded.title,
                  messages=excluded.messages,
                  updated=excluded.updated""",
-            (chat["id"], email, chat["title"], json.dumps(chat["messages"]),
+            (chat["id"], session_key_hash, chat["title"], json.dumps(chat["messages"]),
              chat.get("created", time.time()), chat.get("updated", time.time())),
         )
 
-def db_delete_chat(email, chat_id):
+def db_delete_chat(session_key_hash, chat_id):
     with _db() as c:
-        c.execute("DELETE FROM chats WHERE id=? AND email=?", (chat_id, email))
+        c.execute("DELETE FROM chats WHERE id=? AND session_key_hash=?", (chat_id, session_key_hash))
 
-def db_delete_all_chats(email):
+def db_delete_all_chats(session_key_hash):
     with _db() as c:
-        c.execute("DELETE FROM chats WHERE email=?", (email,))
+        c.execute("DELETE FROM chats WHERE session_key_hash=?", (session_key_hash,))
 
-def db_get_settings(email):
+def db_get_settings(session_key_hash):
     with _db() as c:
-        row = c.execute("SELECT language, model FROM settings WHERE email=?", (email,)).fetchone()
+        row = c.execute("SELECT language, model FROM settings WHERE session_key_hash=?", (session_key_hash,)).fetchone()
     if row is None:
         return {"language": "en", "model": "groq"}
     return {"language": row["language"], "model": row["model"]}
 
-def db_set_settings(email, language=None, model=None):
-    cur = db_get_settings(email)
+def db_set_settings(session_key_hash, language=None, model=None):
+    cur = db_get_settings(session_key_hash)
     language = language or cur["language"]
     model = model or cur["model"]
     with _db() as c:
         c.execute(
-            """INSERT INTO settings(email, language, model) VALUES(?, ?, ?)
-               ON CONFLICT(email) DO UPDATE SET language=excluded.language, model=excluded.model""",
-            (email, language, model),
+            """INSERT INTO settings(session_key_hash, language, model) VALUES(?, ?, ?)
+               ON CONFLICT(session_key_hash) DO UPDATE SET language=excluded.language, model=excluded.model""",
+            (session_key_hash, language, model),
         )
 
 db_init()
+
+cookie_manager = stx.CookieManager()
+
+def get_session_key():
+    cookies = cookie_manager.get_all()
+    if cookies and COOKIE_KEY in cookies:
+        return cookies[COOKIE_KEY]
+    return None
+
+def set_session_key(key):
+    cookie_manager.set(COOKIE_KEY, key, expires_at=datetime.now() + timedelta(days=365))
+
+def clear_session_key():
+    cookie_manager.delete(COOKIE_KEY)
+
+def render_login_screen():
+    st.html("""
+    <link href='https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap' rel='stylesheet'>
+    <style>
+    html,body,[class*='css'],.stApp,#root,.main,.block-container{font-family:'Space Grotesk',sans-serif;background-color:#0a0a0a !important;color:#ececec !important;}
+    #MainMenu,footer,header{visibility:hidden;}
+    .login-container{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:80vh;padding:20px;}
+    .login-brand{font-size:2rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:40px;}
+    .login-box{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:32px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
+    .login-title{font-size:1.2rem;color:#fff;font-weight:600;margin:0 0 24px 0;text-align:center;}
+    </style>
+    """)
+    
+    st.html('<div class="login-container"><div class="login-brand">STRAFE AI</div><div class="login-box"><div class="login-title">Enter Chat Code</div></div></div>')
+    
+    ip = get_client_ip()
+    
+    if is_ip_banned(ip):
+        st.error("Your IP is temporarily banned due to too many failed login attempts. Try again in 15 minutes.")
+        st.stop()
+    
+    cooldown = check_login_cooldown(ip)
+    if cooldown > 0:
+        st.warning(f"Please wait {int(cooldown)} seconds before trying again.")
+        st.stop()
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        key_input = st.text_input("Chat Code", placeholder="XXXXXXXX", max_chars=8, key="login_key_input")
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            login_btn = st.button("Login", use_container_width=True, key="login_btn")
+        with col_btn2:
+            generate_btn = st.button("Generate Key", use_container_width=True, key="generate_btn")
+    
+    if generate_btn:
+        new_key = generate_key()
+        create_key(new_key)
+        set_session_key(new_key)
+        st.success(f"Generated key: {new_key}")
+        st.info("This key has been saved to your browser. You'll auto-login next time.")
+        time.sleep(1.5)
+        st.rerun()
+    
+    if login_btn:
+        if not key_input or len(key_input) != 8:
+            st.error("Please enter a valid 8-character code.")
+            record_login_attempt(ip, False)
+            st.stop()
+        
+        key_input = key_input.upper()
+        
+        if validate_key(key_input):
+            set_session_key(key_input)
+            record_login_attempt(ip, True)
+            st.success("Logged in successfully!")
+            time.sleep(1.5)
+            st.rerun()
+        else:
+            st.error("Invalid chat code.")
+            record_login_attempt(ip, False)
+            st.stop()
 
 INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
 INPUT_CSS = """
@@ -634,9 +809,14 @@ def build_ui_html(data_json):
 
 
 def _chat_store():
-    if "guest_chats" not in st.session_state:
-        st.session_state.guest_chats = db_get_chats(GUEST_KEY)
-    return st.session_state.guest_chats
+    session_key = get_session_key()
+    if not session_key:
+        return {}
+    key_hash = hash_key(session_key)
+    cache_key = f"chats_{key_hash}"
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = db_get_chats(key_hash)
+    return st.session_state[cache_key]
 
 
 def _create_new_chat_id():
@@ -646,9 +826,12 @@ def _create_new_chat_id():
 def _create_current_chat():
     store = _chat_store()
     to_remove = [cid for cid, c in store.items() if not c.get("messages")]
+    session_key = get_session_key()
+    key_hash = hash_key(session_key) if session_key else None
     for cid in to_remove:
         del store[cid]
-        db_delete_chat(GUEST_KEY, cid)
+        if key_hash:
+            db_delete_chat(key_hash, cid)
     cid = _create_new_chat_id()
     msgs = []
     chat = {"id": cid, "title": "New chat", "messages": msgs, "created": time.time(), "updated": time.time()}
@@ -665,6 +848,10 @@ def _persist_current_chat():
     cid = st.session_state.get("current_chat_id")
     if not cid:
         return
+    session_key = get_session_key()
+    if not session_key:
+        return
+    key_hash = hash_key(session_key)
     first_user = next((m for m in msgs if m.get("role") == "user"), None)
     title = ((first_user or {}).get("content") or "").strip().replace("\n", " ")[:48] or "New chat"
     chat = {
@@ -674,7 +861,7 @@ def _persist_current_chat():
         "created": st.session_state.get("chat_created", time.time()),
         "updated": time.time(),
     }
-    db_save_chat(GUEST_KEY, chat)
+    db_save_chat(key_hash, chat)
 
 
 def _get_chat_summaries():
@@ -694,7 +881,12 @@ def _get_chat_summaries():
 
 
 def init_ui_state():
-    s = db_get_settings(GUEST_KEY)
+    session_key = get_session_key()
+    if not session_key:
+        return
+    
+    key_hash = hash_key(session_key)
+    s = db_get_settings(key_hash)
     st.session_state.setdefault("language", s["language"])
     st.session_state.setdefault("model_choice", s["model"])
 
@@ -725,6 +917,8 @@ def get_action_field(action, name, default=None):
 
 def handle_action(action):
     t = get_action_field(action, "type")
+    session_key = get_session_key()
+    key_hash = hash_key(session_key) if session_key else None
 
     def _reset():
         st.session_state["editing"] = None
@@ -749,7 +943,8 @@ def handle_action(action):
         if cid and cid in store:
             _reset()
             del store[cid]
-            db_delete_chat(GUEST_KEY, cid)
+            if key_hash:
+                db_delete_chat(key_hash, cid)
             if st.session_state.get("current_chat_id") == cid:
                 remaining = [c for c in store.values() if c.get("messages")]
                 if remaining:
@@ -762,23 +957,26 @@ def handle_action(action):
 
     elif t == "delete_all_chats":
         _reset()
-        db_delete_all_chats(GUEST_KEY)
-        st.session_state.guest_chats = {}
+        if key_hash:
+            db_delete_all_chats(key_hash)
+        cache_key = f"chats_{key_hash}" if key_hash else None
+        if cache_key:
+            st.session_state[cache_key] = {}
         st.session_state.pop("current_chat_id", None)
         st.session_state.pop("messages", None)
         init_ui_state()
 
     elif t == "set_language":
         lang = get_action_field(action, "lang")
-        if lang:
+        if lang and key_hash:
             st.session_state.language = lang
-            db_set_settings(GUEST_KEY, language=lang)
+            db_set_settings(key_hash, language=lang)
 
     elif t == "set_model":
         model = get_action_field(action, "model")
-        if model:
+        if model and key_hash:
             st.session_state.model_choice = model
-            db_set_settings(GUEST_KEY, model=model)
+            db_set_settings(key_hash, model=model)
 
     st.rerun()
 
@@ -862,6 +1060,12 @@ div[data-testid='stExpander'] summary{color:#8a8a8a !important;font-size:0.85rem
 div[data-testid='stExpander'] .stMarkdown{color:#bdbdbd !important;font-size:0.9rem !important;}
 </style>
 """
+
+session_key = get_session_key()
+
+if not session_key or not validate_key(session_key):
+    render_login_screen()
+    st.stop()
 
 st.html(CSS)
 st.html("<div class='brand'>STRAFE AI</div>")
@@ -1023,6 +1227,7 @@ def msg_to_api(m, distance_from_latest=None):
         fcontent = f.get("content", "")
         parts.insert(0, {"type": "text", "text": f"[Attached file: {fname}]\n```\n{fcontent}\n```"})
     if imgs:
+        imgs = imgs[:3]
         if distance_from_latest is not None:
             if distance_from_latest < 2:
                 for u in imgs:
@@ -1108,7 +1313,7 @@ def ask(use_search=False, use_think=False, look_back=False):
             }
         }]
 
-    max_rounds = 5 if use_search else 1
+    max_rounds = 2 if use_search else 1
     tool_calls_made = 0
     last_err = None
     last_round_had_tool_call = False
