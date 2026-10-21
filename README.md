@@ -1,3 +1,3 @@
 stafe - small fun project
 how to use:
-"strafe.streamlit.app"
+https://strafe.streamlit.app
