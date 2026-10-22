@@ -26,26 +26,24 @@ ATTEMPT_WINDOW = 600
 BAN_DURATION = 900
 COOLDOWN = 5
 
+if DB_PATH.exists():
+    try:
+        _tc = sqlite3.connect(str(DB_PATH))
+        _tc.execute("SELECT code_hash FROM chats LIMIT 1")
+        _tc.close()
+    except Exception:
+        try:
+            DB_PATH.unlink()
+        except Exception:
+            pass
+
 def _db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def db_init():
     with _db() as c:
-        tables = [row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-        if "chats" in tables:
-            cols = [row[1] for row in c.execute("PRAGMA table_info(chats)").fetchall()]
-            if "code_hash" not in cols:
-                c.execute("DROP TABLE chats")
-        if "settings" in tables:
-            cols = [row[1] for row in c.execute("PRAGMA table_info(settings)").fetchall()]
-            if "code_hash" not in cols:
-                c.execute("DROP TABLE settings")
-        if "codes" in tables:
-            cols = [row[1] for row in c.execute("PRAGMA table_info(codes)").fetchall()]
-            if "code_hash" not in cols:
-                c.execute("DROP TABLE codes")
         c.executescript("""
             CREATE TABLE IF NOT EXISTS chats (
                 id TEXT PRIMARY KEY,
@@ -108,7 +106,7 @@ def get_ip():
         if real_ip and real_ip.strip():
             return real_ip.strip()
         return None
-    except:
+    except Exception:
         return None
 
 def is_banned(ip):
@@ -178,11 +176,11 @@ def get_active_code():
             return cookie_code
     return None
 
-def login(code):
+def do_login(code):
     set_url_code(code)
     set_cookie_code(code)
 
-def logout():
+def do_logout():
     del st.query_params["code"]
     cookie_manager.delete(COOKIE_KEY)
 
@@ -196,9 +194,7 @@ def db_get_chats(code_hash):
 
 def db_save_chat(code_hash, chat):
     with _db() as c:
-        c.execute("""INSERT INTO chats(id, code_hash, title, messages, created, updated) VALUES(?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated=excluded.updated""",
-            (chat["id"], code_hash, chat["title"], json.dumps(chat["messages"]), chat.get("created", time.time()), chat.get("updated", time.time())))
+        c.execute("INSERT INTO chats(id, code_hash, title, messages, created, updated) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated=excluded.updated", (chat["id"], code_hash, chat["title"], json.dumps(chat["messages"]), chat.get("created", time.time()), chat.get("updated", time.time())))
 
 def db_delete_chat(code_hash, chat_id):
     with _db() as c:
@@ -220,10 +216,10 @@ def db_set_settings(code_hash, language=None, model=None):
     language = language or cur["language"]
     model = model or cur["model"]
     with _db() as c:
-        c.execute("""INSERT INTO settings(code_hash, language, model) VALUES(?, ?, ?)
-            ON CONFLICT(code_hash) DO UPDATE SET language=excluded.language, model=excluded.model""", (code_hash, language, model))
+        c.execute("INSERT INTO settings(code_hash, language, model) VALUES(?, ?, ?) ON CONFLICT(code_hash) DO UPDATE SET language=excluded.language, model=excluded.model", (code_hash, language, model))
 
 INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
+
 INPUT_CSS = """
 #bar{position:fixed;bottom:8px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
 #atts{display:flex;gap:8px;width:100%;max-width:760px;flex-wrap:wrap;padding-left:4px;box-sizing:border-box;}
@@ -258,6 +254,7 @@ INPUT_CSS = """
 #cam-capture{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:#fff;margin-bottom:40px;z-index:10000001;cursor:pointer;flex-shrink:0;}
 #cam-capture:active{transform:scale(0.9);}
 """
+
 INPUT_JS = """
 export default function(component){
     const{parentElement,setTriggerValue}=component;
@@ -630,7 +627,7 @@ export default function(component){
         });
     };
     const codeEl=$('#current-code');
-    if(codeEl){codeEl.onclick=function(){navigator.clipboard.writeText(DATA.code).then(()=>{$('#code-copied').style.display='block';setTimeout(()=>{$('#code-copied').style.display='none';},1500);});};}
+    if(codeEl){codeEl.onclick=function(){navigator.clipboard.writeText(DATA.code).then(()=>{var el=$('#code-copied');if(el){el.style.display='block';setTimeout(function(){el.style.display='none';},1500);}});};}
     applySidebar();
     applySettings();
     renderChats();
@@ -686,7 +683,7 @@ def build_ui_html(data_json):
         '      <div class="setting-label">Your code</div>',
         '      <div class="code-display" id="current-code">' + (st.query_params.get("code", "") if st.query_params.get("code") else "--------") + '</div>',
         '      <div id="code-copied" style="display:none;color:#4f8dff;font-size:0.82rem;text-align:center;margin-bottom:12px;">Copied to clipboard!</div>',
-        '      <div class="about-text">Click the code to copy. Share this code to access your chats from another device.</div>',
+        '      <div class="about-text">Click the code to copy. Share it to access your chats from another device.</div>',
         '    </div>',
         '    <div class="setting-section">',
         '      <button class="setting-btn danger" id="logout-btn" type="button">Sign out</button>',
@@ -720,7 +717,7 @@ def _code_hash():
 
 def _chat_store():
     ch = _code_hash()
-    cache_key = f"chats_{ch}"
+    cache_key = "chats_" + ch
     if cache_key not in st.session_state:
         st.session_state[cache_key] = db_get_chats(ch)
     return st.session_state[cache_key]
@@ -834,7 +831,7 @@ def handle_action(action):
     elif t == "delete_all_chats":
         _reset()
         db_delete_all_chats(ch)
-        cache_key = f"chats_{ch}"
+        cache_key = "chats_" + ch
         st.session_state[cache_key] = {}
         st.session_state.pop("current_chat_id", None)
         st.session_state.pop("messages", None)
@@ -850,7 +847,7 @@ def handle_action(action):
             st.session_state.model_choice = model
             db_set_settings(ch, model=model)
     elif t == "logout":
-        logout()
+        do_logout()
     st.rerun()
 
 def render_ui():
@@ -862,7 +859,7 @@ def render_ui():
     data = {"chats": chats, "current_chat_id": current_cid, "language": lang, "model": model, "code": code}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     h = hashlib.md5(data_json.encode()).hexdigest()[:10]
-    name = f"strafe_ui_{h}"
+    name = "strafe_ui_" + h
     if "ui_factories" not in st.session_state:
         st.session_state.ui_factories = {}
     if name not in st.session_state.ui_factories:
@@ -870,7 +867,7 @@ def render_ui():
         while len(st.session_state.ui_factories) > 10:
             del st.session_state.ui_factories[next(iter(st.session_state.ui_factories))]
     comp = st.session_state.ui_factories[name]
-    result = comp(key=f"strafe_ui_k_{h}", on_ui_action_change=lambda: None)
+    result = comp(key="strafe_ui_k_" + h, on_ui_action_change=lambda: None)
     if result:
         action = getattr(result, "ui_action", None)
         if action:
@@ -928,15 +925,8 @@ div[data-testid='stExpander'] .stMarkdown{color:#bdbdbd !important;font-size:0.9
 .login-box{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:32px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
 .login-label{font-size:0.72rem;text-transform:uppercase;letter-spacing:1.5px;color:#6a6a6a;margin-bottom:10px;font-weight:700;}
 .login-input-row{display:flex;gap:8px;margin-bottom:16px;}
-.login-input{flex:1;height:48px;border-radius:12px;border:1px solid #2a2a2a;background:#0a0a0a;color:#fff;font-size:1.1rem;padding:0 16px;font-family:'Space Grotesk',monospace;letter-spacing:3px;text-transform:uppercase;outline:none;transition:border-color 0.2s;box-sizing:border-box;}
-.login-input:focus{border-color:#4f8dff;}
-.login-input::placeholder{color:#3a3a3a;letter-spacing:1px;text-transform:none;font-size:0.95rem;}
-.login-send{width:48px;height:48px;border-radius:12px;border:none;background:#4f8dff;color:#fff;font-size:1.3rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background 0.2s;}
-.login-send:hover{background:#2563eb;}
 .login-divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:#4a4a4a;font-size:0.78rem;}
 .login-divider::before,.login-divider::after{content:'';flex:1;height:1px;background:#2a2a2a;}
-.login-gen{width:100%;height:48px;border-radius:12px;border:1px dashed #3a3a3a;background:transparent;color:#bdbdbd;font-size:0.95rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:8px;}
-.login-gen:hover{background:#1a1a1a;color:#fff;border-color:#4f8dff;border-style:solid;}
 .login-error{background:#2a1a1a;border:1px solid #ff5555;border-radius:10px;padding:12px 16px;color:#ff8888;font-size:0.85rem;margin-bottom:16px;text-align:center;}
 .login-info{color:#6b7280;font-size:0.78rem;text-align:center;margin-top:16px;line-height:1.5;}
 </style>
@@ -958,15 +948,17 @@ if not active_code:
         st.stop()
     cooldown = get_cooldown(ip)
     if cooldown > 0:
-        st.html(f'<div class="login-error">Please wait {int(cooldown)} seconds before trying again.</div>')
+        st.html('<div class="login-error">Please wait ' + str(int(cooldown)) + ' seconds before trying again.</div>')
         st.html('</div></div>')
         st.stop()
     if err:
-        st.html(f'<div class="login-error">{err}</div>')
+        st.html('<div class="login-error">' + H.escape(err) + '</div>')
     st.html('<div class="login-label">Your code</div>')
-    st.html('<div class="login-input-row">')
     code_input = st.text_input("code", placeholder="8 character code", max_chars=8, key="login_code_input", label_visibility="collapsed")
-    if st.button(SEND_GLYPH, key="login_send_btn", type="primary"):
+    col_a, col_b = st.columns([5, 1])
+    with col_b:
+        send_clicked = st.button(SEND_GLYPH, key="login_send_btn", type="primary", use_container_width=True)
+    if send_clicked:
         raw = (code_input or "").strip().upper()
         if len(raw) != CODE_LENGTH:
             st.session_state["login_error"] = "Code must be exactly 8 characters."
@@ -977,21 +969,20 @@ if not active_code:
             record_attempt(ip, False)
             st.rerun()
         if not code_exists(hash_code(raw)):
-            st.session_state["login_error"] = "Invalid code. Generate a new one if you don't have one."
+            st.session_state["login_error"] = "Invalid code. Generate a new one below."
             record_attempt(ip, False)
             st.rerun()
         record_attempt(ip, True)
-        login(raw)
+        do_login(raw)
         time.sleep(0.3)
         st.rerun()
-    st.html('</div>')
     st.html('<div class="login-divider">OR</div>')
     if st.button("\uff0b Generate new code", key="login_gen_btn", use_container_width=True):
         new_code = gen_code()
         create_code(new_code)
         record_attempt(ip, True)
-        login(new_code)
-        st.toast(f"Your code: {new_code} \u2014 save it somewhere safe!")
+        do_login(new_code)
+        st.toast("Your code: " + new_code + " \u2014 save it somewhere safe!")
         time.sleep(0.5)
         st.rerun()
     st.html('<div class="login-info">Your chats and settings are tied to this code.<br>Share it to access your data from another device.</div>')
@@ -1002,7 +993,7 @@ if not active_code:
 st.html(CSS)
 st.html("<div class='brand'>STRAFE AI</div>")
 
-KEYS = [st.secrets.get(f"GROQ_API_KEY_{i}") for i in range(1, 7)]
+KEYS = [st.secrets.get("GROQ_API_KEY_" + str(i)) for i in range(1, 7)]
 KEYS = [k for k in KEYS if k]
 if not KEYS:
     st.error("No GROQ_API_KEY_1..6 found in secrets.")
@@ -1045,7 +1036,10 @@ def pick_model():
         return st.session_state.groq_model
     try:
         response = Groq(api_key=KEYS[0]).models.list()
-        avail = {m.id if hasattr(m, 'id') else m[0] for m in response.data}
+        avail = set()
+        for m in response.data:
+            mid = m.id if hasattr(m, "id") else str(m)
+            avail.add(mid)
     except Exception:
         avail = set()
     for p in PREFERRED:
@@ -1085,16 +1079,16 @@ def _search_fallback(query, num_results, reason):
             if out:
                 return out
         except DDGSException as e:
-            last_err = f"{b}: {e}"
+            last_err = str(b) + ": " + str(e)
             time.sleep(0.3)
             continue
         except Exception as e:
-            last_err = f"{b}: {e}"
+            last_err = str(b) + ": " + str(e)
             continue
-    return [{"title": "Search unavailable", "link": "", "snippet": f"All search backends are rate limited ({last_err}). Answer from training data with caveat."}]
+    return [{"title": "Search unavailable", "link": "", "snippet": "All search backends rate limited (" + str(last_err) + "). Answer from training data with caveat."}]
 
 def web_search(query, num_results=3):
-    url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
+    url = "https://html.duckduckgo.com/html/?q=" + quote(query)
     try:
         r = cffi_requests.get(url, impersonate="chrome124", timeout=15, headers={"Accept-Language": "en-US,en;q=0.9", "Referer": "https://duckduckgo.com/"})
         if r.status_code == 200 and "challenge" not in r.text.lower()[:500]:
@@ -1119,7 +1113,7 @@ def web_search(query, num_results=3):
             if results:
                 return results
             return _search_fallback(query, num_results, "empty DDG results")
-        return _search_fallback(query, num_results, f"DDG status {r.status_code}")
+        return _search_fallback(query, num_results, "DDG status " + str(r.status_code))
     except Exception as e:
         return _search_fallback(query, num_results, str(e)[:80])
 
@@ -1133,7 +1127,7 @@ def msg_to_api(m, distance_from_latest=None):
     for f in files:
         fname = f.get("name", "file")
         fcontent = f.get("content", "")
-        parts.insert(0, {"type": "text", "text": f"[Attached file: {fname}]\n```\n{fcontent}\n```"})
+        parts.insert(0, {"type": "text", "text": "[Attached file: " + fname + "]\n```\n" + fcontent + "\n```"})
     if imgs:
         imgs = imgs[:3]
         if distance_from_latest is not None:
@@ -1238,7 +1232,7 @@ def ask(use_search=False, use_think=False, look_back=False):
                     except Exception:
                         query = ""
                     results = web_search(query)
-                    context = "\n".join(f"{res['title']}: {res['snippet']} ({res['link']})" for res in results)
+                    context = "\n".join(res["title"] + ": " + res["snippet"] + " (" + res["link"] + ")" for res in results)
                     history.append({"role": "tool", "tool_call_id": tc.id, "content": context})
             continue
         else:
@@ -1247,7 +1241,7 @@ def ask(use_search=False, use_think=False, look_back=False):
             secs = max(0.1, time.time() - t0)
             used = (r.usage.total_tokens if r.usage else 0)
             tps = round(used / secs, 1) if used else 0
-            return {"content": content, "secs": round(secs, 1), "tok": f"{tps} tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": reasoning if use_think else None}
+            return {"content": content, "secs": round(secs, 1), "tok": str(tps) + " tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": reasoning if use_think else None}
     if last_round_had_tool_call:
         raise RuntimeError("Model kept calling tools without producing a final answer")
     raise RuntimeError(last_err or "All API keys failed")
@@ -1261,8 +1255,8 @@ def info_html(m):
         flags.append("\u2315")
     if m.get("think"):
         flags.append("\u269b")
-    flag_str = " ".join(flags) + " " if flags else ""
-    return f'<div class="info-line">{flag_str}sent <span>{sent}</span> &nbsp;\u00b7&nbsp; {secs}s &nbsp;\u00b7&nbsp; {tps}</div>'
+    flag_str = (" ".join(flags) + " ") if flags else ""
+    return '<div class="info-line">' + flag_str + 'sent <span>' + str(sent) + '</span> &nbsp;\u00b7&nbsp; ' + str(secs) + 's &nbsp;\u00b7&nbsp; ' + str(tps) + '</div>'
 
 init_ui_state()
 render_ui()
@@ -1277,7 +1271,7 @@ if act:
             result = ask(use_search=prev_msg.get("search", False), use_think=prev_msg.get("think", False))
             st.session_state.messages.append({"role": "assistant", **result})
         except Exception as e:
-            st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}", "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": False, "think": False, "reasoning": None})
+            st.session_state.messages.append({"role": "assistant", "content": "Error: " + str(e), "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": False, "think": False, "reasoning": None})
         _persist_current_chat()
         st.rerun()
     elif kind == "edit":
@@ -1300,7 +1294,7 @@ if pending is not None:
         result = ask(use_search=use_search, use_think=use_think, look_back=is_look_back)
         st.session_state.messages.append({"role": "assistant", **result})
     except Exception as e:
-        st.session_state.messages.append({"role": "assistant", "content": f"Error: {str(e)}", "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": None})
+        st.session_state.messages.append({"role": "assistant", "content": "Error: " + str(e), "secs": 0, "tok": "0 tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": None})
     st.session_state["editing"] = None
     _persist_current_chat()
     st.rerun()
@@ -1310,28 +1304,28 @@ editing = st.session_state.get("editing")
 for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
         if editing == i:
-            new = st.text_area("Edit", value=m["content"], key=f"ed{i}", height=100)
+            new = st.text_area("Edit", value=m["content"], key="ed" + str(i), height=100)
             sc, sk = st.columns([1, 6])
             with sc:
-                if st.button("Save", key=f"sv{i}"):
+                if st.button("Save", key="sv" + str(i)):
                     st.session_state.messages[:] = st.session_state.messages[:i]
                     st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False), "images": m.get("images", []), "files": m.get("files", [])}
                     st.session_state["editing"] = None
                     st.rerun()
             with sk:
-                if st.button("Cancel", key=f"cx{i}"):
+                if st.button("Cancel", key="cx" + str(i)):
                     st.session_state["editing"] = None
                     st.rerun()
         else:
             safe = H.escape(m["content"]).replace("\n", "<br>")
-            thumbs = "".join(f'<img class="chat-thumb" src="{u}"/>' for u in (m.get("images") or []))
-            file_badges = "".join(f'<span class="file-badge">\u2399 {H.escape(f.get("name","file"))}</span>' for f in (m.get("files") or []))
-            st.html(f'<div class="user-bubble"><div class="user-bubble-inner">{thumbs}{file_badges}{safe}</div></div>')
+            thumbs = "".join('<img class="chat-thumb" src="' + u + '"/>' for u in (m.get("images") or []))
+            file_badges = "".join('<span class="file-badge">\u2399 ' + H.escape(f.get("name", "file")) + '</span>' for f in (m.get("files") or []))
+            st.html('<div class="user-bubble"><div class="user-bubble-inner">' + thumbs + file_badges + safe + '</div></div>')
             _sp, _mn = st.columns([5, 1])
             with _mn:
-                with st.popover(MENU_GLYPH, key=f"mu{i}"):
+                with st.popover(MENU_GLYPH, key="mu" + str(i)):
                     st.html(info_html(m))
-                    if st.button("Edit", key=f"ue{i}"):
+                    if st.button("Edit", key="ue" + str(i)):
                         st.session_state["act"] = ("edit", i)
                         st.rerun()
     else:
@@ -1339,18 +1333,18 @@ for i, m in enumerate(st.session_state.messages):
         if m.get("think"):
             think_secs = m.get("secs", "?")
             if reasoning:
-                with st.expander(f"\u269b Thought for {think_secs}s", expanded=False):
+                with st.expander("\u269b Thought for " + str(think_secs) + "s", expanded=False):
                     st.markdown(reasoning)
             else:
-                with st.expander(f"\u269b Thought for {think_secs}s", expanded=False):
+                with st.expander("\u269b Thought for " + str(think_secs) + "s", expanded=False):
                     st.markdown("_Model processed the request but didn't return visible thoughts._")
         with st.chat_message("assistant"):
             st.markdown(m["content"])
         _mn, _sp = st.columns([1, 3])
         with _mn:
-            with st.popover(MENU_GLYPH, key=f"ma{i}"):
+            with st.popover(MENU_GLYPH, key="ma" + str(i)):
                 st.html(info_html(m))
-                if st.button("Retry", key=f"ar{i}"):
+                if st.button("Retry", key="ar" + str(i)):
                     st.session_state["act"] = ("retry", i)
                     st.rerun()
 
@@ -1368,4 +1362,4 @@ if ma:
     elif ma == "file_too_large":
         st.toast("File too large. Max 500KB for text files.")
     else:
-        st.toast(f"{ma} selected")
+        st.toast(str(ma) + " selected")
