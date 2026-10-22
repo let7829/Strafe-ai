@@ -1,14 +1,15 @@
 import streamlit as st
 import streamlit.components.v2 as components
 from groq import Groq, NotFoundError
-import random, time, html as H, json, uuid, os, sqlite3, hashlib, secrets
-from datetime import datetime
+import random, time, html as H, json, uuid, os, sqlite3, hashlib, secrets, string
+from datetime import datetime, timedelta
 from pathlib import Path
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException
 from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote, unquote
+import extra_streamlit_components as stx
 
 st.set_page_config(page_title="Strafe AI", page_icon="https://raw.githubusercontent.com/let7829/Strafe-ai/refs/heads/main/logo.png", layout="centered")
 
@@ -17,12 +18,13 @@ MENU_GLYPH = "\u22ef"
 CLOSE_GLYPH = "\u2715"
 PLUS_GLYPH = "\uff0b"
 
-GUEST_KEY = "__guest__"
 DB_PATH = Path(os.environ.get("STRAFE_DB", "strafe.db"))
-SESSION_KEY_BYTES = 24
-IP_BAN_SECONDS = 3600
-LOGIN_ATTEMPT_WINDOW = 900
-LOGIN_MAX_ATTEMPTS = 8
+COOKIE_KEY = "strafe_code"
+CODE_LENGTH = 8
+MAX_ATTEMPTS = 5
+ATTEMPT_WINDOW = 600
+BAN_DURATION = 900
+COOLDOWN = 5
 
 def _db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -31,204 +33,182 @@ def _db():
 
 def db_init():
     with _db() as c:
-        cols = [row[1] for row in c.execute("PRAGMA table_info(chats)").fetchall()]
-        if cols and "email" in cols and "session_key_hash" not in cols:
-            c.executescript("""
-                ALTER TABLE chats RENAME TO chats_old;
-                CREATE TABLE chats (
-                    id TEXT PRIMARY KEY,
-                    session_key_hash TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    messages TEXT NOT NULL,
-                    created REAL NOT NULL,
-                    updated REAL NOT NULL
-                );
-                INSERT INTO chats(id, session_key_hash, title, messages, created, updated)
-                    SELECT id, '__guest__', title, messages, created, updated FROM chats_old;
-                DROP TABLE chats_old;
-                CREATE INDEX IF NOT EXISTS idx_chats_key_updated ON chats(session_key_hash, updated DESC);
-            """)
-        cols2 = [row[1] for row in c.execute("PRAGMA table_info(settings)").fetchall()]
-        if cols2 and "email" in cols2 and "session_key_hash" not in cols2:
-            c.executescript("""
-                ALTER TABLE settings RENAME TO settings_old;
-                CREATE TABLE settings (
-                    session_key_hash TEXT PRIMARY KEY,
-                    language TEXT NOT NULL DEFAULT 'en',
-                    model TEXT NOT NULL DEFAULT 'groq'
-                );
-                INSERT INTO settings(session_key_hash, language, model)
-                    SELECT email, language, model FROM settings_old;
-                DROP TABLE settings_old;
-            """)
         c.executescript("""
             CREATE TABLE IF NOT EXISTS chats (
                 id TEXT PRIMARY KEY,
-                session_key_hash TEXT NOT NULL,
+                code_hash TEXT NOT NULL,
                 title TEXT NOT NULL,
                 messages TEXT NOT NULL,
                 created REAL NOT NULL,
                 updated REAL NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_chats_key_updated ON chats(session_key_hash, updated DESC);
+            CREATE INDEX IF NOT EXISTS idx_chats_code ON chats(code_hash, updated DESC);
             CREATE TABLE IF NOT EXISTS settings (
-                session_key_hash TEXT PRIMARY KEY,
+                code_hash TEXT PRIMARY KEY,
                 language TEXT NOT NULL DEFAULT 'en',
                 model TEXT NOT NULL DEFAULT 'groq'
             );
-            CREATE TABLE IF NOT EXISTS valid_keys (
-                session_key_hash TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS codes (
+                code_hash TEXT PRIMARY KEY,
                 created REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS ip_bans (
-                ip_hash TEXT PRIMARY KEY,
-                until REAL NOT NULL
+                ip TEXT PRIMARY KEY,
+                ban_until REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS login_attempts (
-                ip_hash TEXT PRIMARY KEY,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                last_attempt REAL NOT NULL
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                attempted_at REAL NOT NULL,
+                success INTEGER NOT NULL DEFAULT 0
             );
+            CREATE INDEX IF NOT EXISTS idx_attempts_ip ON login_attempts(ip, attempted_at);
         """)
 
 db_init()
 
-def hash_key(raw_key):
-    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+def gen_code():
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(CODE_LENGTH))
 
-def db_key_valid(key_hash):
+def hash_code(code):
+    return hashlib.sha256(code.encode()).hexdigest()
+
+def code_exists(code_hash):
     with _db() as c:
-        row = c.execute("SELECT 1 FROM valid_keys WHERE session_key_hash=?", (key_hash,)).fetchone()
+        row = c.execute("SELECT 1 FROM codes WHERE code_hash=?", (code_hash,)).fetchone()
     return row is not None
 
-def db_add_key(key_hash):
+def create_code(code):
     with _db() as c:
-        c.execute("INSERT OR IGNORE INTO valid_keys(session_key_hash, created) VALUES(?, ?)", (key_hash, time.time()))
+        c.execute("INSERT OR IGNORE INTO codes(code_hash, created) VALUES(?, ?)", (hash_code(code), time.time()))
 
-def db_ip_banned(ip_hash):
-    if not ip_hash:
+def get_ip():
+    try:
+        headers = st.context.headers
+        xff = headers.get("X-Forwarded-For")
+        if xff:
+            ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
+            if ips:
+                return ips[0]
+        real_ip = headers.get("X-Real-Ip")
+        if real_ip and real_ip.strip():
+            return real_ip.strip()
+        return None
+    except:
+        return None
+
+def is_banned(ip):
+    if not ip:
         return False
     with _db() as c:
-        row = c.execute("SELECT until FROM ip_bans WHERE ip_hash=?", (ip_hash,)).fetchone()
-    return row is not None and row["until"] > time.time()
+        row = c.execute("SELECT ban_until FROM ip_bans WHERE ip=?", (ip,)).fetchone()
+    if row and row["ban_until"] > time.time():
+        return True
+    if row and row["ban_until"] <= time.time():
+        with _db() as c:
+            c.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
+    return False
 
-def db_ban_ip(ip_hash):
-    if not ip_hash:
-        return
+def get_cooldown(ip):
+    if not ip:
+        return 0
     with _db() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO ip_bans(ip_hash, until) VALUES(?, ?)",
-            (ip_hash, time.time() + IP_BAN_SECONDS),
-        )
+        row = c.execute("SELECT attempted_at FROM login_attempts WHERE ip=? ORDER BY attempted_at DESC LIMIT 1", (ip,)).fetchone()
+    if row:
+        elapsed = time.time() - row["attempted_at"]
+        if elapsed < COOLDOWN:
+            return COOLDOWN - elapsed
+    return 0
 
-def db_record_attempt(ip_hash):
-    if not ip_hash:
+def record_attempt(ip, success):
+    if not ip:
         return
     now = time.time()
     with _db() as c:
-        row = c.execute("SELECT attempts, last_attempt FROM login_attempts WHERE ip_hash=?", (ip_hash,)).fetchone()
-        if row is None or now - row["last_attempt"] > LOGIN_ATTEMPT_WINDOW:
-            c.execute(
-                "INSERT OR REPLACE INTO login_attempts(ip_hash, attempts, last_attempt) VALUES(?, ?, ?)",
-                (ip_hash, 1, now),
-            )
-        else:
-            new_count = row["attempts"] + 1
-            c.execute(
-                "UPDATE login_attempts SET attempts=?, last_attempt=? WHERE ip_hash=?",
-                (new_count, now, ip_hash),
-            )
-            if new_count >= LOGIN_MAX_ATTEMPTS:
-                db_ban_ip(ip_hash)
+        c.execute("INSERT INTO login_attempts(ip, attempted_at, success) VALUES(?, ?, ?)", (ip, now, 1 if success else 0))
+        cutoff = now - ATTEMPT_WINDOW
+        c.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (cutoff,))
+        if not success:
+            failed = c.execute("SELECT COUNT(*) FROM login_attempts WHERE ip=? AND attempted_at > ? AND success=0", (ip, now - ATTEMPT_WINDOW)).fetchone()[0]
+            if failed >= MAX_ATTEMPTS:
+                c.execute("INSERT OR REPLACE INTO ip_bans(ip, ban_until) VALUES(?, ?)", (ip, now + BAN_DURATION))
 
-def db_clear_attempts(ip_hash):
-    if not ip_hash:
-        return
-    with _db() as c:
-        c.execute("DELETE FROM login_attempts WHERE ip_hash=?", (ip_hash,))
+cookie_manager = stx.CookieManager()
 
-def db_get_chats(session_key_hash):
+def get_cookie_code():
+    cookies = cookie_manager.get_all()
+    if cookies and COOKIE_KEY in cookies:
+        return cookies[COOKIE_KEY]
+    return None
+
+def set_cookie_code(code):
+    cookie_manager.set(COOKIE_KEY, code, expires_at=datetime.now() + timedelta(days=365))
+
+def get_url_code():
+    return st.query_params.get("code")
+
+def set_url_code(code):
+    st.query_params["code"] = code
+
+def get_active_code():
+    url_code = get_url_code()
+    if url_code:
+        url_code = url_code.upper()
+        if len(url_code) == CODE_LENGTH and code_exists(hash_code(url_code)):
+            return url_code
+    cookie_code = get_cookie_code()
+    if cookie_code:
+        cookie_code = cookie_code.upper()
+        if len(cookie_code) == CODE_LENGTH and code_exists(hash_code(cookie_code)):
+            set_url_code(cookie_code)
+            return cookie_code
+    return None
+
+def login(code):
+    set_url_code(code)
+    set_cookie_code(code)
+
+def logout():
+    del st.query_params["code"]
+    cookie_manager.delete(COOKIE_KEY)
+
+def db_get_chats(code_hash):
     with _db() as c:
-        rows = c.execute(
-            "SELECT id, title, messages, created, updated FROM chats WHERE session_key_hash=? ORDER BY updated DESC",
-            (session_key_hash,),
-        ).fetchall()
+        rows = c.execute("SELECT id, title, messages, created, updated FROM chats WHERE code_hash=? ORDER BY updated DESC", (code_hash,)).fetchall()
     out = {}
     for r in rows:
-        out[r["id"]] = {
-            "id": r["id"],
-            "title": r["title"],
-            "messages": json.loads(r["messages"]),
-            "created": r["created"],
-            "updated": r["updated"],
-        }
+        out[r["id"]] = {"id": r["id"], "title": r["title"], "messages": json.loads(r["messages"]), "created": r["created"], "updated": r["updated"]}
     return out
 
-def db_save_chat(session_key_hash, chat):
+def db_save_chat(code_hash, chat):
     with _db() as c:
-        c.execute(
-            """INSERT INTO chats(id, session_key_hash, title, messages, created, updated)
-               VALUES(?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 title=excluded.title,
-                 messages=excluded.messages,
-                 updated=excluded.updated""",
-            (chat["id"], session_key_hash, chat["title"], json.dumps(chat["messages"]),
-             chat.get("created", time.time()), chat.get("updated", time.time())),
-        )
+        c.execute("""INSERT INTO chats(id, code_hash, title, messages, created, updated) VALUES(?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated=excluded.updated""",
+            (chat["id"], code_hash, chat["title"], json.dumps(chat["messages"]), chat.get("created", time.time()), chat.get("updated", time.time())))
 
-def db_delete_chat(session_key_hash, chat_id):
+def db_delete_chat(code_hash, chat_id):
     with _db() as c:
-        c.execute("DELETE FROM chats WHERE id=? AND session_key_hash=?", (chat_id, session_key_hash))
+        c.execute("DELETE FROM chats WHERE id=? AND code_hash=?", (chat_id, code_hash))
 
-def db_delete_all_chats(session_key_hash):
+def db_delete_all_chats(code_hash):
     with _db() as c:
-        c.execute("DELETE FROM chats WHERE session_key_hash=?", (session_key_hash,))
+        c.execute("DELETE FROM chats WHERE code_hash=?", (code_hash,))
 
-def db_get_settings(session_key_hash):
+def db_get_settings(code_hash):
     with _db() as c:
-        row = c.execute("SELECT language, model FROM settings WHERE session_key_hash=?", (session_key_hash,)).fetchone()
+        row = c.execute("SELECT language, model FROM settings WHERE code_hash=?", (code_hash,)).fetchone()
     if row is None:
         return {"language": "en", "model": "groq"}
     return {"language": row["language"], "model": row["model"]}
 
-def db_set_settings(session_key_hash, language=None, model=None):
-    cur = db_get_settings(session_key_hash)
+def db_set_settings(code_hash, language=None, model=None):
+    cur = db_get_settings(code_hash)
     language = language or cur["language"]
     model = model or cur["model"]
     with _db() as c:
-        c.execute(
-            """INSERT INTO settings(session_key_hash, language, model) VALUES(?, ?, ?)
-               ON CONFLICT(session_key_hash) DO UPDATE SET language=excluded.language, model=excluded.model""",
-            (session_key_hash, language, model),
-        )
-
-def _client_ip_hash():
-    headers = st.context.headers if hasattr(st, "context") else {}
-    ip = ""
-    if headers:
-        ip = (
-            headers.get("X-Forwarded-For", "").split(",")[0].strip()
-            or headers.get("X-Real-Ip", "").strip()
-            or headers.get("Remote-Addr", "").strip()
-        )
-    if not ip:
-        return ""
-    return hashlib.sha256(ip.encode("utf-8")).hexdigest()[:32]
-
-def init_session_key():
-    if "session_key_hash" not in st.session_state:
-        st.session_state.session_key_hash = GUEST_KEY
-    if "session_key_valid" not in st.session_state:
-        st.session_state.session_key_valid = False
-    raw = st.session_state.get("session_key_raw")
-    if raw:
-        h = hash_key(raw)
-        if db_key_valid(h):
-            st.session_state.session_key_hash = h
-            st.session_state.session_key_valid = True
-
-init_session_key()
+        c.execute("""INSERT INTO settings(code_hash, language, model) VALUES(?, ?, ?)
+            ON CONFLICT(code_hash) DO UPDATE SET language=excluded.language, model=excluded.model""", (code_hash, language, model))
 
 INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
 INPUT_CSS = """
@@ -328,11 +308,7 @@ export default function(component){
             x.type='button';
             x.className='att-x';
             x.textContent='\\u2715';
-            x.onclick=function(ev){
-                ev.stopPropagation();
-                attachments.splice(idx,1);
-                renderAtts();
-            };
+            x.onclick=function(ev){ev.stopPropagation();attachments.splice(idx,1);renderAtts();};
             wrap.appendChild(img);
             wrap.appendChild(x);
             atts.appendChild(wrap);
@@ -347,32 +323,19 @@ export default function(component){
             x.type='button';
             x.className='att-file-x';
             x.textContent='\\u2715';
-            x.onclick=function(ev){
-                ev.stopPropagation();
-                fileAttachments.splice(idx,1);
-                renderAtts();
-            };
+            x.onclick=function(ev){ev.stopPropagation();fileAttachments.splice(idx,1);renderAtts();};
             wrap.appendChild(name);
             wrap.appendChild(x);
             atts.appendChild(wrap);
         });
     }
     function stopCamera(){
-        if(camStream){
-            camStream.getTracks().forEach(function(t){t.stop();});
-            camStream=null;
-        }
+        if(camStream){camStream.getTracks().forEach(function(t){t.stop();});camStream=null;}
         camOverlay.classList.remove('active');
     }
     async function openCamera(){
-        try{
-            camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
-            camVideo.srcObject=camStream;
-            camOverlay.classList.add('active');
-            menu.classList.remove('open');
-        }catch(e){
-            setTriggerValue('menu_action','camera_error');
-        }
+        try{camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});camVideo.srcObject=camStream;camOverlay.classList.add('active');menu.classList.remove('open');}
+        catch(e){setTriggerValue('menu_action','camera_error');}
     }
     async function capturePhoto(){
         if(!camStream)return;
@@ -389,9 +352,7 @@ export default function(component){
         const val=input.value.trim();
         if(!val&&!attachments.length&&!fileAttachments.length)return;
         const resized=[];
-        for(let i=0;i<attachments.length;i++){
-            resized.push(await resizeImage(attachments[i],1024));
-        }
+        for(let i=0;i<attachments.length;i++){resized.push(await resizeImage(attachments[i],1024));}
         setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:resized,files:fileAttachments.slice()});
         input.value='';
         attachments=[];
@@ -400,40 +361,17 @@ export default function(component){
     }
     btn.onclick=send;
     input.onkeydown=function(e){if(e.key==='Enter')send();};
-    if(plusBtn&&menu){
-        plusBtn.onclick=function(){
-            menu.classList.toggle('open');
-        };
-    }
-    if(photoBtn){
-        photoBtn.onclick=function(){
-            menu.classList.remove('open');
-            imageInput.click();
-        };
-    }
-    if(cameraBtn){
-        cameraBtn.onclick=openCamera;
-    }
-    if(fileBtn){
-        fileBtn.onclick=function(){
-            menu.classList.remove('open');
-            fileInput.click();
-        };
-    }
-    if(camClose){
-        camClose.onclick=stopCamera;
-    }
-    if(camCapture){
-        camCapture.onclick=capturePhoto;
-    }
+    if(plusBtn&&menu){plusBtn.onclick=function(){menu.classList.toggle('open');};}
+    if(photoBtn){photoBtn.onclick=function(){menu.classList.remove('open');imageInput.click();};}
+    if(cameraBtn){cameraBtn.onclick=openCamera;}
+    if(fileBtn){fileBtn.onclick=function(){menu.classList.remove('open');fileInput.click();};}
+    if(camClose){camClose.onclick=stopCamera;}
+    if(camCapture){camCapture.onclick=capturePhoto;}
     imageInput.onchange=function(){
         const f=imageInput.files[0];
         if(!f)return;
         const reader=new FileReader();
-        reader.onload=function(){
-            attachments.push(reader.result);
-            renderAtts();
-        };
+        reader.onload=function(){attachments.push(reader.result);renderAtts();};
         reader.readAsDataURL(f);
         imageInput.value='';
     };
@@ -441,32 +379,15 @@ export default function(component){
         const f=fileInput.files[0];
         if(!f)return;
         const ext=f.name.split('.').pop().toLowerCase();
-        if(!TEXT_EXTS.includes(ext)&&!f.type.startsWith('text/')){
-            setTriggerValue('menu_action','unsupported_file');
-            fileInput.value='';
-            return;
-        }
-        if(f.size>500000){
-            setTriggerValue('menu_action','file_too_large');
-            fileInput.value='';
-            return;
-        }
+        if(!TEXT_EXTS.includes(ext)&&!f.type.startsWith('text/')){setTriggerValue('menu_action','unsupported_file');fileInput.value='';return;}
+        if(f.size>500000){setTriggerValue('menu_action','file_too_large');fileInput.value='';return;}
         const reader=new FileReader();
-        reader.onload=function(){
-            fileAttachments.push({name:f.name,content:reader.result});
-            renderAtts();
-        };
+        reader.onload=function(){fileAttachments.push({name:f.name,content:reader.result});renderAtts();};
         reader.readAsText(f);
         fileInput.value='';
     };
-    btnSearch.onclick=function(){
-        searchActive=!searchActive;
-        this.classList.toggle('active',searchActive);
-    };
-    btnThink.onclick=function(){
-        thinkActive=!thinkActive;
-        this.classList.toggle('active',thinkActive);
-    };
+    btnSearch.onclick=function(){searchActive=!searchActive;this.classList.toggle('active',searchActive);};
+    btnThink.onclick=function(){thinkActive=!thinkActive;this.classList.toggle('active',thinkActive);};
     btnSearch.classList.toggle('active',searchActive);
 }
 """
@@ -535,16 +456,14 @@ UI_CSS = """
 .radio-title .badge{color:#4f8dff;font-size:0.7rem;font-weight:600;margin-left:6px;}
 .radio-desc{font-size:0.76rem;color:#7a7a7a;margin-top:3px;line-height:1.45;}
 .about-text{color:#bdbdbd;font-size:0.88rem;line-height:1.65;padding:2px 0 8px 0;}
+.code-display{background:#0a0a0a;border:1px solid #2a2a2a;border-radius:10px;padding:14px 18px;font-family:'Space Grotesk',monospace;font-size:1.2rem;letter-spacing:4px;color:#4f8dff;text-align:center;margin-bottom:12px;user-select:all;cursor:pointer;}
+.code-display:hover{border-color:#4f8dff;}
 .modal{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.72);z-index:1000010;display:none;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;font-family:'Space Grotesk',sans-serif;backdrop-filter:blur(4px);}
 .modal.open{display:flex;}
 .modal-content{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
 .modal-title{font-size:1.15rem;color:#fff;font-weight:600;margin:0 0 8px 0;}
 .modal-text{font-size:0.88rem;color:#8a8a8a;line-height:1.55;margin:0 0 20px 0;}
-.modal-input{width:100%;height:44px;border-radius:10px;border:1px solid #2a2a2a;background:#0a0a0a;color:#fff;font-size:0.95rem;padding:0 14px;font-family:'Space Grotesk',sans-serif;box-sizing:border-box;margin-bottom:16px;outline:none;transition:border-color 0.2s;}
-.modal-input:focus{border-color:#4f8dff;}
 .modal-btn{width:100%;height:44px;border-radius:10px;border:none;font-size:0.95rem;font-family:'Space Grotesk',sans-serif;cursor:pointer;margin-bottom:8px;transition:all 0.2s;font-weight:500;}
-.modal-btn.primary{background:#4f8dff;color:#fff;}
-.modal-btn.primary:hover{background:#3a7ae0;}
 .modal-btn.secondary{background:#1a1a1a;color:#bdbdbd;border:1px solid #2a2a2a;}
 .modal-btn.secondary:hover{background:#222;color:#fff;}
 .modal-btn.danger{background:#ff5555;color:#fff;}
@@ -562,7 +481,6 @@ export default function(component){
     function getLS(k,d){try{return localStorage.getItem(k)||d;}catch(e){return d;}}
     function setLS(k,v){try{localStorage.setItem(k,v);}catch(e){}}
     let savedTab=getLS('strafe_tab','language');
-    if(savedTab==='account')savedTab='language';
     let ui={sidebarOpen:getLS('strafe_sidebar','0')==='1',settingsOpen:getLS('strafe_settings','0')==='1',tab:savedTab};
     function saveUI(){setLS('strafe_sidebar',ui.sidebarOpen?'1':'0');setLS('strafe_settings',ui.settingsOpen?'1':'0');setLS('strafe_tab',ui.tab);}
     const $sidebar=$('#sidebar');
@@ -573,12 +491,6 @@ export default function(component){
     const $confirmModal=$('#confirm-modal');
     const $confirmTitle=$('#confirm-title');
     const $confirmText=$('#confirm-text');
-    const $keyModal=$('#key-modal');
-    const $keyInput=$('#key-input');
-    const $keySubmit=$('#key-submit');
-    const $keyCancel=$('#key-cancel');
-    const $keySection=$('#key-section');
-    const $keyStatus=$('#key-status');
     function openSidebar(){ui.sidebarOpen=true;saveUI();applySidebar();}
     function closeSidebar(){ui.sidebarOpen=false;saveUI();applySidebar();}
     function applySidebar(){$sidebar.classList.toggle('open',ui.sidebarOpen);$sidebarBackdrop.classList.toggle('open',ui.sidebarOpen);}
@@ -586,7 +498,7 @@ export default function(component){
     function closeSettings(){ui.settingsOpen=false;saveUI();applySettings();}
     function applySettings(){$settingsPanel.classList.toggle('open',ui.settingsOpen);$settingsBackdrop.classList.toggle('open',ui.settingsOpen);}
     function selectTab(t){
-        const valid=['language','models','about'];
+        const valid=['language','models','session','about'];
         if(!valid.includes(t))t='language';
         ui.tab=t;
         saveUI();
@@ -599,20 +511,6 @@ export default function(component){
     function closeConfirm(){$confirmModal.classList.remove('open');confirmCallback=null;}
     $('#confirm-yes').onclick=()=>{if(confirmCallback)confirmCallback();};
     $('#confirm-no').onclick=closeConfirm;
-    function openKeyModal(){$keyInput.value='';$keyInput.style.borderColor='';$keyModal.classList.add('open');setTimeout(()=>$keyInput.focus(),100);}
-    function closeKeyModal(){$keyModal.classList.remove('open');}
-    $keySubmit.onclick=()=>{
-        const val=$keyInput.value.trim();
-        if(!val){$keyInput.style.borderColor='#ff5555';return;}
-        closeKeyModal();
-        setTriggerValue('ui_action',{type:'login',key:val});
-    };
-    $keyCancel.onclick=closeKeyModal;
-    $keyInput.onkeydown=(e)=>{
-        if(e.key==='Enter')$keySubmit.click();
-        else if(e.key==='Escape')closeKeyModal();
-        else $keyInput.style.borderColor='';
-    };
     function renderChats(){
         $chatList.innerHTML='';
         const chats=DATA.chats||[];
@@ -697,15 +595,6 @@ export default function(component){
             $modelList.appendChild(item);
         });
     }
-    function renderKeySection(){
-        $keyStatus.textContent=DATA.authenticated?'Signed in with a session key.':'Browsing as guest. Sign in with a session key to keep chats and settings.'
-        const $signInBtn=$('#sign-in-btn');
-        const $signOutBtn=$('#sign-out-btn');
-        if(DATA.authenticated){$signInBtn.style.display='none';$signOutBtn.style.display='flex';}
-        else{$signInBtn.style.display='flex';$signOutBtn.style.display='none';}
-    }
-    $('#sign-in-btn').onclick=()=>{closeSettings();openKeyModal();};
-    $('#sign-out-btn').onclick=()=>{closeSettings();setTriggerValue('ui_action',{type:'logout'});};
     $('#menu-btn').onclick=openSidebar;
     $('#sidebar-close').onclick=closeSidebar;
     $sidebarBackdrop.onclick=closeSidebar;
@@ -720,16 +609,23 @@ export default function(component){
             setTriggerValue('ui_action',{type:'delete_all_chats'});
         });
     };
+    $('#logout-btn').onclick=()=>{
+        showConfirm('Sign out?','You will return to the login page. Your chats are saved.',()=>{
+            closeConfirm();
+            closeSettings();
+            setTriggerValue('ui_action',{type:'logout'});
+        });
+    };
+    const codeEl=$('#current-code');
+    if(codeEl){codeEl.onclick=function(){navigator.clipboard.writeText(DATA.code).then(()=>{$( '#code-copied').style.display='block';setTimeout(()=>{$('#code-copied').style.display='none';},1500);});};}
     applySidebar();
     applySettings();
     renderChats();
     renderLanguages();
     renderModels();
-    renderKeySection();
     selectTab(ui.tab);
 }
 """
-
 
 def build_ui_html(data_json):
     parts = [
@@ -756,7 +652,8 @@ def build_ui_html(data_json):
         '  </div>',
         '  <div class="tabs">',
         '    <button class="tab active" data-tab="language" type="button">Language</button>',
-        '    <button class="tab" data-tab="models" type="button">Models/Operators</button>',
+        '    <button class="tab" data-tab="models" type="button">Models</button>',
+        '    <button class="tab" data-tab="session" type="button">Session</button>',
         '    <button class="tab" data-tab="about" type="button">About</button>',
         '  </div>',
         '  <div class="tab-content active" data-tab-content="language">',
@@ -767,20 +664,25 @@ def build_ui_html(data_json):
         '  </div>',
         '  <div class="tab-content" data-tab-content="models">',
         '    <div class="setting-section">',
-        '      <div class="setting-label">Operators</div>',
+        '      <div class="setting-label">Models</div>',
         '      <div id="model-list"></div>',
+        '    </div>',
+        '  </div>',
+        '  <div class="tab-content" data-tab-content="session">',
+        '    <div class="setting-section">',
+        '      <div class="setting-label">Your code</div>',
+        '      <div class="code-display" id="current-code">' + (st.query_params.get("code", "") if st.query_params.get("code") else "--------") + '</div>',
+        '      <div id="code-copied" style="display:none;color:#4f8dff;font-size:0.82rem;text-align:center;margin-bottom:12px;">Copied to clipboard!</div>',
+        '      <div class="about-text">Click the code to copy. Share this code to access your chats from another device.</div>',
+        '    </div>',
+        '    <div class="setting-section">',
+        '      <button class="setting-btn danger" id="logout-btn" type="button">Sign out</button>',
         '    </div>',
         '  </div>',
         '  <div class="tab-content" data-tab-content="about">',
         '    <div class="setting-section">',
-        '      <div class="setting-label">Session</div>',
-        '      <div class="about-text" id="key-status"></div>',
-        '      <button class="setting-btn" id="sign-in-btn" type="button">Sign in with session key</button>',
-        '      <button class="setting-btn" id="sign-out-btn" type="button">Sign out</button>',
-        '    </div>',
-        '    <div class="setting-section">',
         '      <div class="setting-label">About</div>',
-        '      <div class="about-text">Strafe is a project made for you\'re use, no data can be seen by anyone even by owner.</div>',
+        '      <div class="about-text">Strafe is a project made for your use, no data can be seen by anyone even by owner.</div>',
         '    </div>',
         '    <div class="setting-section">',
         '      <div class="setting-label">Danger Zone</div>',
@@ -790,52 +692,36 @@ def build_ui_html(data_json):
         '</aside>',
         '<div id="confirm-modal" class="modal">',
         '  <div class="modal-content">',
-        '    <h2 class="modal-title" id="confirm-title">Delete chat?</h2>',
+        '    <h2 class="modal-title" id="confirm-title">Confirm</h2>',
         '    <p class="modal-text" id="confirm-text">Are you sure?</p>',
-        '    <button id="confirm-yes" class="modal-btn danger" type="button">Delete</button>',
+        '    <button id="confirm-yes" class="modal-btn danger" type="button">Yes</button>',
         '    <button id="confirm-no" class="modal-btn secondary" type="button">Cancel</button>',
-        '  </div>',
-        '</div>',
-        '<div id="key-modal" class="modal">',
-        '  <div class="modal-content">',
-        '    <h2 class="modal-title">Session key</h2>',
-        '    <p class="modal-text">Paste your session key to save chats and settings.</p>',
-        '    <input type="password" id="key-input" class="modal-input" placeholder="sk_..."/>',
-        '    <button id="key-submit" class="modal-btn primary" type="button">Sign in</button>',
-        '    <button id="key-cancel" class="modal-btn secondary" type="button">Cancel</button>',
         '  </div>',
         '</div>',
         '<script id="strafe-data" type="application/json">' + data_json + '</script>',
     ]
     return "\n".join(parts)
 
-
-def _current_key_hash():
-    return st.session_state.get("session_key_hash", GUEST_KEY)
+def _code_hash():
+    return hash_code(st.query_params.get("code", ""))
 
 def _chat_store():
-    key = _current_key_hash()
-    if key == GUEST_KEY:
-        if "guest_chats" not in st.session_state:
-            st.session_state.guest_chats = db_get_chats(GUEST_KEY)
-        return st.session_state.guest_chats
-    if "user_chats" not in st.session_state or st.session_state.get("user_chats_key") != key:
-        st.session_state.user_chats = db_get_chats(key)
-        st.session_state.user_chats_key = key
-    return st.session_state.user_chats
-
+    ch = _code_hash()
+    cache_key = f"chats_{ch}"
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = db_get_chats(ch)
+    return st.session_state[cache_key]
 
 def _create_new_chat_id():
     return "chat_" + uuid.uuid4().hex[:12]
 
-
 def _create_current_chat():
     store = _chat_store()
-    key = _current_key_hash()
+    ch = _code_hash()
     to_remove = [cid for cid, c in store.items() if not c.get("messages")]
     for cid in to_remove:
         del store[cid]
-        db_delete_chat(key, cid)
+        db_delete_chat(ch, cid)
     cid = _create_new_chat_id()
     msgs = []
     chat = {"id": cid, "title": "New chat", "messages": msgs, "created": time.time(), "updated": time.time()}
@@ -844,26 +730,18 @@ def _create_current_chat():
     st.session_state.messages = msgs
     st.session_state.chat_created = chat["created"]
 
-
 def _persist_current_chat():
-    key = _current_key_hash()
     msgs = st.session_state.get("messages", [])
     if not msgs:
         return
     cid = st.session_state.get("current_chat_id")
     if not cid:
         return
+    ch = _code_hash()
     first_user = next((m for m in msgs if m.get("role") == "user"), None)
     title = ((first_user or {}).get("content") or "").strip().replace("\n", " ")[:48] or "New chat"
-    chat = {
-        "id": cid,
-        "title": title,
-        "messages": msgs,
-        "created": st.session_state.get("chat_created", time.time()),
-        "updated": time.time(),
-    }
-    db_save_chat(key, chat)
-
+    chat = {"id": cid, "title": title, "messages": msgs, "created": st.session_state.get("chat_created", time.time()), "updated": time.time()}
+    db_save_chat(ch, chat)
 
 def _get_chat_summaries():
     store = _chat_store()
@@ -880,16 +758,13 @@ def _get_chat_summaries():
         del s["_updated"]
     return summaries
 
-
 def init_ui_state():
-    key = _current_key_hash()
-    s = db_get_settings(key)
+    ch = _code_hash()
+    s = db_get_settings(ch)
     st.session_state.setdefault("language", s["language"])
     st.session_state.setdefault("model_choice", s["model"])
-
     store = _chat_store()
     cid = st.session_state.get("current_chat_id")
-
     if cid is None or cid not in store:
         remaining = [c for c in store.values() if c.get("messages")]
         if remaining:
@@ -903,7 +778,6 @@ def init_ui_state():
         st.session_state.messages = store[cid]["messages"]
         st.session_state.chat_created = store[cid].get("created", time.time())
 
-
 def get_action_field(action, name, default=None):
     if action is None:
         return default
@@ -911,46 +785,15 @@ def get_action_field(action, name, default=None):
         return action.get(name, default)
     return getattr(action, name, default)
 
-
-def _switch_to_key(raw_key):
-    h = hash_key(raw_key)
-    st.session_state.session_key_raw = raw_key
-    st.session_state.session_key_hash = h
-    st.session_state.session_key_valid = True
-    st.session_state.pop("current_chat_id", None)
-    st.session_state.pop("messages", None)
-    st.session_state.pop("user_chats", None)
-    st.session_state.pop("user_chats_key", None)
-    st.session_state.pop("language", None)
-    st.session_state.pop("model_choice", None)
-
-
-def _switch_to_guest():
-    _persist_current_chat()
-    st.session_state.session_key_raw = None
-    st.session_state.session_key_hash = GUEST_KEY
-    st.session_state.session_key_valid = False
-    st.session_state.pop("current_chat_id", None)
-    st.session_state.pop("messages", None)
-    st.session_state.pop("user_chats", None)
-    st.session_state.pop("user_chats_key", None)
-    st.session_state.pop("language", None)
-    st.session_state.pop("model_choice", None)
-
-
 def handle_action(action):
     t = get_action_field(action, "type")
-
+    ch = _code_hash()
     def _reset():
         st.session_state["editing"] = None
         st.session_state["act"] = None
-
-    ip_hash = _client_ip_hash()
-
     if t == "new_chat":
         _reset()
         _create_current_chat()
-
     elif t == "open_chat":
         cid = get_action_field(action, "chat_id")
         store = _chat_store()
@@ -959,15 +802,13 @@ def handle_action(action):
             st.session_state.current_chat_id = cid
             st.session_state.messages = store[cid]["messages"]
             st.session_state.chat_created = store[cid].get("created", time.time())
-
     elif t == "delete_chat":
         cid = get_action_field(action, "chat_id")
-        key = _current_key_hash()
         store = _chat_store()
         if cid and cid in store:
             _reset()
             del store[cid]
-            db_delete_chat(key, cid)
+            db_delete_chat(ch, cid)
             if st.session_state.get("current_chat_id") == cid:
                 remaining = [c for c in store.values() if c.get("messages")]
                 if remaining:
@@ -977,79 +818,42 @@ def handle_action(action):
                     st.session_state.chat_created = remaining[0].get("created", time.time())
                 else:
                     _create_current_chat()
-
-    elif t == "login":
-        raw = get_action_field(action, "key") or ""
-        if db_ip_banned(ip_hash):
-            st.toast("Too many attempts. Try again later.")
-            st.rerun()
-        raw = raw.strip()
-        if not raw:
-            st.rerun()
-        h = hash_key(raw)
-        if not db_key_valid(h):
-            db_record_attempt(ip_hash)
-            st.toast("Invalid session key.")
-            st.rerun()
-        db_clear_attempts(ip_hash)
-        _reset()
-        _switch_to_key(raw)
-        init_ui_state()
-
-    elif t == "logout":
-        _reset()
-        _switch_to_guest()
-        init_ui_state()
-
     elif t == "delete_all_chats":
         _reset()
-        key = _current_key_hash()
-        db_delete_all_chats(key)
-        if key == GUEST_KEY:
-            st.session_state.guest_chats = {}
-        else:
-            st.session_state.user_chats = {}
+        db_delete_all_chats(ch)
+        cache_key = f"chats_{ch}"
+        st.session_state[cache_key] = {}
         st.session_state.pop("current_chat_id", None)
         st.session_state.pop("messages", None)
         init_ui_state()
-
     elif t == "set_language":
         lang = get_action_field(action, "lang")
         if lang:
             st.session_state.language = lang
-            db_set_settings(_current_key_hash(), language=lang)
-
+            db_set_settings(ch, language=lang)
     elif t == "set_model":
         model = get_action_field(action, "model")
         if model:
             st.session_state.model_choice = model
-            db_set_settings(_current_key_hash(), model=model)
-
+            db_set_settings(ch, model=model)
+    elif t == "logout":
+        logout()
     st.rerun()
-
 
 def render_ui():
     chats = _get_chat_summaries()
     current_cid = st.session_state.get("current_chat_id")
     lang = st.session_state.get("language", "en")
     model = st.session_state.get("model_choice", "groq")
-    authenticated = st.session_state.get("session_key_valid", False)
-    data = {
-        "chats": chats,
-        "current_chat_id": current_cid,
-        "language": lang,
-        "model": model,
-        "authenticated": authenticated,
-    }
+    code = st.query_params.get("code", "")
+    data = {"chats": chats, "current_chat_id": current_cid, "language": lang, "model": model, "code": code}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     h = hashlib.md5(data_json.encode()).hexdigest()[:10]
     name = f"strafe_ui_{h}"
     if "ui_factories" not in st.session_state:
         st.session_state.ui_factories = {}
     if name not in st.session_state.ui_factories:
-        st.session_state.ui_factories[name] = components.component(
-            name, html=build_ui_html(data_json), css=UI_CSS, js=UI_JS
-        )
+        st.session_state.ui_factories[name] = components.component(name, html=build_ui_html(data_json), css=UI_CSS, js=UI_JS)
         while len(st.session_state.ui_factories) > 10:
             del st.session_state.ui_factories[next(iter(st.session_state.ui_factories))]
     comp = st.session_state.ui_factories[name]
@@ -1058,7 +862,6 @@ def render_ui():
         action = getattr(result, "ui_action", None)
         if action:
             handle_action(action)
-
 
 def get_prompt():
     result = chat_input(key="strafe_inp", on_submitted_change=lambda: None)
@@ -1071,7 +874,6 @@ def get_prompt():
     if submitted:
         return submitted
     return None
-
 
 CSS = """
 <link href='https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap' rel='stylesheet'>
@@ -1107,8 +909,82 @@ div[data-testid='stPopover'] button p{margin:0 !important;}
 div[data-testid='stExpander'] details{background:#1a1a1a !important;border:1px solid #2a2a2a !important;border-radius:12px !important;padding:8px 12px !important;margin:8px 0 !important;}
 div[data-testid='stExpander'] summary{color:#8a8a8a !important;font-size:0.85rem !important;cursor:pointer !important;}
 div[data-testid='stExpander'] .stMarkdown{color:#bdbdbd !important;font-size:0.9rem !important;}
+.login-page{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:85vh;padding:20px;}
+.login-brand{font-size:3rem;font-weight:700;letter-spacing:8px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:8px;}
+.login-sub{color:#6b7280;font-size:0.9rem;margin-bottom:40px;letter-spacing:1px;}
+.login-box{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:32px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
+.login-label{font-size:0.72rem;text-transform:uppercase;letter-spacing:1.5px;color:#6a6a6a;margin-bottom:10px;font-weight:700;}
+.login-input-row{display:flex;gap:8px;margin-bottom:16px;}
+.login-input{flex:1;height:48px;border-radius:12px;border:1px solid #2a2a2a;background:#0a0a0a;color:#fff;font-size:1.1rem;padding:0 16px;font-family:'Space Grotesk',monospace;letter-spacing:3px;text-transform:uppercase;outline:none;transition:border-color 0.2s;box-sizing:border-box;}
+.login-input:focus{border-color:#4f8dff;}
+.login-input::placeholder{color:#3a3a3a;letter-spacing:1px;text-transform:none;font-size:0.95rem;}
+.login-send{width:48px;height:48px;border-radius:12px;border:none;background:#4f8dff;color:#fff;font-size:1.3rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background 0.2s;}
+.login-send:hover{background:#2563eb;}
+.login-divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:#4a4a4a;font-size:0.78rem;}
+.login-divider::before,.login-divider::after{content:'';flex:1;height:1px;background:#2a2a2a;}
+.login-gen{width:100%;height:48px;border-radius:12px;border:1px dashed #3a3a3a;background:transparent;color:#bdbdbd;font-size:0.95rem;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.login-gen:hover{background:#1a1a1a;color:#fff;border-color:#4f8dff;border-style:solid;}
+.login-error{background:#2a1a1a;border:1px solid #ff5555;border-radius:10px;padding:12px 16px;color:#ff8888;font-size:0.85rem;margin-bottom:16px;text-align:center;}
+.login-info{color:#6b7280;font-size:0.78rem;text-align:center;margin-top:16px;line-height:1.5;}
 </style>
 """
+
+active_code = get_active_code()
+
+if not active_code:
+    st.html(CSS)
+    ip = get_ip()
+    err = st.session_state.pop("login_error", None)
+    st.html('<div class="login-page">')
+    st.html('<div class="login-brand">STRAFE</div>')
+    st.html('<div class="login-sub">Enter your code to continue</div>')
+    st.html('<div class="login-box">')
+    if is_banned(ip):
+        st.html('<div class="login-error">Too many failed attempts. Your IP is banned for 15 minutes.</div>')
+        st.html('</div></div>')
+        st.stop()
+    cooldown = get_cooldown(ip)
+    if cooldown > 0:
+        st.html(f'<div class="login-error">Please wait {int(cooldown)} seconds before trying again.</div>')
+        st.html('</div></div>')
+        st.stop()
+    if err:
+        st.html(f'<div class="login-error">{err}</div>')
+    st.html('<div class="login-label">Your code</div>')
+    st.html('<div class="login-input-row">')
+    code_input = st.text_input("code", placeholder="8 character code", max_chars=8, key="login_code_input", label_visibility="collapsed")
+    if st.button(SEND_GLYPH, key="login_send_btn", type="primary"):
+        raw = (code_input or "").strip().upper()
+        if len(raw) != CODE_LENGTH:
+            st.session_state["login_error"] = "Code must be exactly 8 characters."
+            record_attempt(ip, False)
+            st.rerun()
+        if not all(c in string.ascii_uppercase + string.digits for c in raw):
+            st.session_state["login_error"] = "Code can only contain A-Z and 0-9."
+            record_attempt(ip, False)
+            st.rerun()
+        if not code_exists(hash_code(raw)):
+            st.session_state["login_error"] = "Invalid code. Generate a new one if you don't have one."
+            record_attempt(ip, False)
+            st.rerun()
+        record_attempt(ip, True)
+        login(raw)
+        time.sleep(0.3)
+        st.rerun()
+    st.html('</div>')
+    st.html('<div class="login-divider">OR</div>')
+    if st.button("\uff0b Generate new code", key="login_gen_btn", use_container_width=True):
+        new_code = gen_code()
+        create_code(new_code)
+        record_attempt(ip, True)
+        login(new_code)
+        st.toast(f"Your code: {new_code} \u2014 save it somewhere safe!")
+        time.sleep(0.5)
+        st.rerun()
+    st.html('<div class="login-info">Your chats and settings are tied to this code.<br>Share it to access your data from another device.</div>')
+    st.html('</div>')
+    st.html('</div>')
+    st.stop()
 
 st.html(CSS)
 st.html("<div class='brand'>STRAFE AI</div>")
@@ -1116,7 +992,7 @@ st.html("<div class='brand'>STRAFE AI</div>")
 KEYS = [st.secrets.get(f"GROQ_API_KEY_{i}") for i in range(1, 7)]
 KEYS = [k for k in KEYS if k]
 if not KEYS:
-    st.error("No GROQ_API_KEY_1..6 found in secrets. Add at least one.")
+    st.error("No GROQ_API_KEY_1..6 found in secrets.")
     st.stop()
 
 PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
@@ -1142,16 +1018,12 @@ _celeris_client = None
 def get_celeris_client():
     global _celeris_client
     if _celeris_client is None:
-        try:
-            from openai import OpenAI
-        except ImportError:
-            raise RuntimeError("openai package not installed. Add openai>=1.40.0 to requirements.")
+        from openai import OpenAI
         _celeris_client = OpenAI(api_key=CELERIS_KEY, base_url=CELERIS_BASE_URL)
     return _celeris_client
 
 def celeris_ready():
     return bool(CELERIS_KEY and CELERIS_BASE_URL and CELERIS_MODEL)
-
 
 def pick_model():
     if st.session_state.get("model_choice") == "celeris":
@@ -1179,12 +1051,10 @@ def pick_model():
     st.session_state.groq_model = PREFERRED[0]
     return PREFERRED[0]
 
-
 def mark_key_failed(key):
     if "failed_keys" not in st.session_state:
         st.session_state.failed_keys = set()
     st.session_state.failed_keys.add(key)
-
 
 def _search_fallback(query, num_results, reason):
     backends = ["lite", "html", "auto", "duckduckgo", "google", "bing", "mojeek", "brave"]
@@ -1208,29 +1078,12 @@ def _search_fallback(query, num_results, reason):
         except Exception as e:
             last_err = f"{b}: {e}"
             continue
-    return [{
-        "title": "Search unavailable",
-        "link": "",
-        "snippet": (
-            f"All search backends are rate limited right now ({last_err}). "
-            "Tell the user you cannot search at the moment, answer from your training "
-            "data with a clear caveat that info may be outdated, and suggest they retry in a minute."
-        ),
-    }]
-
+    return [{"title": "Search unavailable", "link": "", "snippet": f"All search backends are rate limited ({last_err}). Answer from training data with caveat."}]
 
 def web_search(query, num_results=3):
     url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
     try:
-        r = cffi_requests.get(
-            url,
-            impersonate="chrome124",
-            timeout=15,
-            headers={
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://duckduckgo.com/",
-            },
-        )
+        r = cffi_requests.get(url, impersonate="chrome124", timeout=15, headers={"Accept-Language": "en-US,en;q=0.9", "Referer": "https://duckduckgo.com/"})
         if r.status_code == 200 and "challenge" not in r.text.lower()[:500]:
             soup = BeautifulSoup(r.text, "html.parser")
             results = []
@@ -1257,7 +1110,6 @@ def web_search(query, num_results=3):
     except Exception as e:
         return _search_fallback(query, num_results, str(e)[:80])
 
-
 def msg_to_api(m, distance_from_latest=None):
     imgs = m.get("images") or []
     files = m.get("files") or []
@@ -1270,6 +1122,7 @@ def msg_to_api(m, distance_from_latest=None):
         fcontent = f.get("content", "")
         parts.insert(0, {"type": "text", "text": f"[Attached file: {fname}]\n```\n{fcontent}\n```"})
     if imgs:
+        imgs = imgs[:3]
         if distance_from_latest is not None:
             if distance_from_latest < 2:
                 for u in imgs:
@@ -1281,7 +1134,6 @@ def msg_to_api(m, distance_from_latest=None):
             for u in imgs:
                 parts.append({"type": "image_url", "image_url": {"url": u, "detail": "low"}})
     return {"role": m["role"], "content": parts}
-
 
 def build_payload(history):
     model = pick_model()
@@ -1295,7 +1147,6 @@ def build_payload(history):
         kw["reasoning_effort"] = "medium"
         kw["reasoning_format"] = "parsed"
     return kw
-
 
 def call_groq_with_retry(kwargs):
     if "failed_keys" not in st.session_state:
@@ -1318,15 +1169,13 @@ def call_groq_with_retry(kwargs):
             continue
     return None, last_err
 
-
 def ask(use_search=False, use_think=False, look_back=False):
     use_celeris = st.session_state.get("model_choice") == "celeris"
     if use_celeris and not celeris_ready():
-        raise RuntimeError("Celeris not configured. Add CELERIS_API_KEY, CELERIS_BASE_URL, CELERIS_MODEL to secrets.")
+        raise RuntimeError("Celeris not configured.")
     if use_celeris and use_search:
         st.toast("Celeris doesn't support search - disabled for this message")
         use_search = False
-
     t0 = time.time()
     slice_msgs = st.session_state.messages if look_back else st.session_state.messages[-HISTORY_LIMIT:]
     total = len(slice_msgs)
@@ -1334,37 +1183,17 @@ def ask(use_search=False, use_think=False, look_back=False):
     for idx, m in enumerate(slice_msgs):
         distance = total - 1 - idx
         history.append(msg_to_api(m, distance_from_latest=distance))
-
     tools = None
     if use_search:
-        tools = [{
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Search the web for current info. Use this for recent events, news, prices, sports, or anything time-sensitive. DO NOT fake the search. If search returns 'No results', tell the user.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Clean keywords ONLY. Fix spelling."
-                        }
-                    },
-                    "required": ["query"]
-                }
-            }
-        }]
-
-    max_rounds = 5 if use_search else 1
+        tools = [{"type": "function", "function": {"name": "web_search", "description": "Search the web for current info. Use for recent events, news, prices, sports. DO NOT fake the search.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Clean keywords ONLY. Fix spelling."}}, "required": ["query"]}}}]
+    max_rounds = 2 if use_search else 1
     tool_calls_made = 0
     last_err = None
     last_round_had_tool_call = False
-
     for round_idx in range(max_rounds):
         kwargs = build_payload(history)
         if tools:
             kwargs["tools"] = tools
-
         if use_celeris:
             try:
                 r = get_celeris_client().chat.completions.create(**kwargs)
@@ -1374,11 +1203,9 @@ def ask(use_search=False, use_think=False, look_back=False):
                 err = str(e)[:120]
         else:
             r, err = call_groq_with_retry(kwargs)
-
         if r is None:
             last_err = err
             break
-
         msg = r.choices[0].message
         if tools and getattr(msg, "tool_calls", None):
             tool_calls_made += len(msg.tool_calls)
@@ -1388,11 +1215,7 @@ def ask(use_search=False, use_think=False, look_back=False):
                 last_round_had_tool_call = True
             assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
             for tc in msg.tool_calls:
-                assistant_msg["tool_calls"].append({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments}
-                })
+                assistant_msg["tool_calls"].append({"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}})
             history.append(assistant_msg)
             for tc in msg.tool_calls:
                 if tc.function.name == "web_search":
@@ -1411,20 +1234,10 @@ def ask(use_search=False, use_think=False, look_back=False):
             secs = max(0.1, time.time() - t0)
             used = (r.usage.total_tokens if r.usage else 0)
             tps = round(used / secs, 1) if used else 0
-            return {
-                "content": content,
-                "secs": round(secs, 1),
-                "tok": f"{tps} tok/s",
-                "sent": datetime.now().strftime("%H:%M"),
-                "search": use_search,
-                "think": use_think,
-                "reasoning": reasoning if use_think else None
-            }
-
+            return {"content": content, "secs": round(secs, 1), "tok": f"{tps} tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": reasoning if use_think else None}
     if last_round_had_tool_call:
         raise RuntimeError("Model kept calling tools without producing a final answer")
     raise RuntimeError(last_err or "All API keys failed")
-
 
 def info_html(m):
     sent = m.get("sent", "?")
@@ -1437,7 +1250,6 @@ def info_html(m):
         flags.append("\u269b")
     flag_str = " ".join(flags) + " " if flags else ""
     return f'<div class="info-line">{flag_str}sent <span>{sent}</span> &nbsp;\u00b7&nbsp; {secs}s &nbsp;\u00b7&nbsp; {tps}</div>'
-
 
 init_ui_state()
 render_ui()
