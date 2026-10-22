@@ -33,6 +33,19 @@ def _db():
 
 def db_init():
     with _db() as c:
+        tables = [row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        if "chats" in tables:
+            cols = [row[1] for row in c.execute("PRAGMA table_info(chats)").fetchall()]
+            if "code_hash" not in cols:
+                c.execute("DROP TABLE chats")
+        if "settings" in tables:
+            cols = [row[1] for row in c.execute("PRAGMA table_info(settings)").fetchall()]
+            if "code_hash" not in cols:
+                c.execute("DROP TABLE settings")
+        if "codes" in tables:
+            cols = [row[1] for row in c.execute("PRAGMA table_info(codes)").fetchall()]
+            if "code_hash" not in cols:
+                c.execute("DROP TABLE codes")
         c.executescript("""
             CREATE TABLE IF NOT EXISTS chats (
                 id TEXT PRIMARY KEY,
@@ -617,7 +630,7 @@ export default function(component){
         });
     };
     const codeEl=$('#current-code');
-    if(codeEl){codeEl.onclick=function(){navigator.clipboard.writeText(DATA.code).then(()=>{$( '#code-copied').style.display='block';setTimeout(()=>{$('#code-copied').style.display='none';},1500);});};}
+    if(codeEl){codeEl.onclick=function(){navigator.clipboard.writeText(DATA.code).then(()=>{$('#code-copied').style.display='block';setTimeout(()=>{$('#code-copied').style.display='none';},1500);});};}
     applySidebar();
     applySettings();
     renderChats();
