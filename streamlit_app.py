@@ -33,7 +33,7 @@ if DB_PATH.exists():
         _tc.close()
     except Exception:
         try:
-            DB_PATH.unlink()
+            os.remove(str(DB_PATH))
         except Exception:
             pass
 
@@ -43,38 +43,23 @@ def _db():
     return conn
 
 def db_init():
-    with _db() as c:
-        c.executescript("""
-            CREATE TABLE IF NOT EXISTS chats (
-                id TEXT PRIMARY KEY,
-                code_hash TEXT NOT NULL,
-                title TEXT NOT NULL,
-                messages TEXT NOT NULL,
-                created REAL NOT NULL,
-                updated REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_chats_code ON chats(code_hash, updated DESC);
-            CREATE TABLE IF NOT EXISTS settings (
-                code_hash TEXT PRIMARY KEY,
-                language TEXT NOT NULL DEFAULT 'en',
-                model TEXT NOT NULL DEFAULT 'groq'
-            );
-            CREATE TABLE IF NOT EXISTS codes (
-                code_hash TEXT PRIMARY KEY,
-                created REAL NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS ip_bans (
-                ip TEXT PRIMARY KEY,
-                ban_until REAL NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS login_attempts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ip TEXT NOT NULL,
-                attempted_at REAL NOT NULL,
-                success INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_attempts_ip ON login_attempts(ip, attempted_at);
-        """)
+    conn = _db()
+    stmts = [
+        "CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, title TEXT NOT NULL, messages TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_chats_code ON chats(code_hash, updated DESC)",
+        "CREATE TABLE IF NOT EXISTS settings (code_hash TEXT PRIMARY KEY, language TEXT NOT NULL DEFAULT 'en', model TEXT NOT NULL DEFAULT 'groq')",
+        "CREATE TABLE IF NOT EXISTS codes (code_hash TEXT PRIMARY KEY, created REAL NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS ip_bans (ip TEXT PRIMARY KEY, ban_until REAL NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL, attempted_at REAL NOT NULL, success INTEGER NOT NULL DEFAULT 0)",
+        "CREATE INDEX IF NOT EXISTS idx_attempts_ip ON login_attempts(ip, attempted_at)",
+    ]
+    for s in stmts:
+        try:
+            conn.execute(s)
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
 
 db_init()
 
@@ -86,13 +71,19 @@ def hash_code(code):
     return hashlib.sha256(code.encode()).hexdigest()
 
 def code_exists(code_hash):
-    with _db() as c:
-        row = c.execute("SELECT 1 FROM codes WHERE code_hash=?", (code_hash,)).fetchone()
-    return row is not None
+    try:
+        with _db() as c:
+            row = c.execute("SELECT 1 FROM codes WHERE code_hash=?", (code_hash,)).fetchone()
+        return row is not None
+    except Exception:
+        return False
 
 def create_code(code):
-    with _db() as c:
-        c.execute("INSERT OR IGNORE INTO codes(code_hash, created) VALUES(?, ?)", (hash_code(code), time.time()))
+    try:
+        with _db() as c:
+            c.execute("INSERT OR IGNORE INTO codes(code_hash, created) VALUES(?, ?)", (hash_code(code), time.time()))
+    except Exception:
+        pass
 
 def get_ip():
     try:
@@ -112,49 +103,64 @@ def get_ip():
 def is_banned(ip):
     if not ip:
         return False
-    with _db() as c:
-        row = c.execute("SELECT ban_until FROM ip_bans WHERE ip=?", (ip,)).fetchone()
-    if row and row["ban_until"] > time.time():
-        return True
-    if row and row["ban_until"] <= time.time():
+    try:
         with _db() as c:
-            c.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
+            row = c.execute("SELECT ban_until FROM ip_bans WHERE ip=?", (ip,)).fetchone()
+        if row and row["ban_until"] > time.time():
+            return True
+        if row and row["ban_until"] <= time.time():
+            with _db() as c:
+                c.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
+    except Exception:
+        pass
     return False
 
 def get_cooldown(ip):
     if not ip:
         return 0
-    with _db() as c:
-        row = c.execute("SELECT attempted_at FROM login_attempts WHERE ip=? ORDER BY attempted_at DESC LIMIT 1", (ip,)).fetchone()
-    if row:
-        elapsed = time.time() - row["attempted_at"]
-        if elapsed < COOLDOWN:
-            return COOLDOWN - elapsed
+    try:
+        with _db() as c:
+            row = c.execute("SELECT attempted_at FROM login_attempts WHERE ip=? ORDER BY attempted_at DESC LIMIT 1", (ip,)).fetchone()
+        if row:
+            elapsed = time.time() - row["attempted_at"]
+            if elapsed < COOLDOWN:
+                return COOLDOWN - elapsed
+    except Exception:
+        pass
     return 0
 
 def record_attempt(ip, success):
     if not ip:
         return
     now = time.time()
-    with _db() as c:
-        c.execute("INSERT INTO login_attempts(ip, attempted_at, success) VALUES(?, ?, ?)", (ip, now, 1 if success else 0))
-        cutoff = now - ATTEMPT_WINDOW
-        c.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (cutoff,))
-        if not success:
-            failed = c.execute("SELECT COUNT(*) FROM login_attempts WHERE ip=? AND attempted_at > ? AND success=0", (ip, now - ATTEMPT_WINDOW)).fetchone()[0]
-            if failed >= MAX_ATTEMPTS:
-                c.execute("INSERT OR REPLACE INTO ip_bans(ip, ban_until) VALUES(?, ?)", (ip, now + BAN_DURATION))
+    try:
+        with _db() as c:
+            c.execute("INSERT INTO login_attempts(ip, attempted_at, success) VALUES(?, ?, ?)", (ip, now, 1 if success else 0))
+            cutoff = now - ATTEMPT_WINDOW
+            c.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (cutoff,))
+            if not success:
+                failed = c.execute("SELECT COUNT(*) FROM login_attempts WHERE ip=? AND attempted_at > ? AND success=0", (ip, now - ATTEMPT_WINDOW)).fetchone()[0]
+                if failed >= MAX_ATTEMPTS:
+                    c.execute("INSERT OR REPLACE INTO ip_bans(ip, ban_until) VALUES(?, ?)", (ip, now + BAN_DURATION))
+    except Exception:
+        pass
 
 cookie_manager = stx.CookieManager()
 
 def get_cookie_code():
-    cookies = cookie_manager.get_all()
-    if cookies and COOKIE_KEY in cookies:
-        return cookies[COOKIE_KEY]
+    try:
+        cookies = cookie_manager.get_all()
+        if cookies and COOKIE_KEY in cookies:
+            return cookies[COOKIE_KEY]
+    except Exception:
+        pass
     return None
 
 def set_cookie_code(code):
-    cookie_manager.set(COOKIE_KEY, code, expires_at=datetime.now() + timedelta(days=365))
+    try:
+        cookie_manager.set(COOKIE_KEY, code, expires_at=datetime.now() + timedelta(days=365))
+    except Exception:
+        pass
 
 def get_url_code():
     return st.query_params.get("code")
@@ -181,42 +187,66 @@ def do_login(code):
     set_cookie_code(code)
 
 def do_logout():
-    del st.query_params["code"]
-    cookie_manager.delete(COOKIE_KEY)
+    try:
+        del st.query_params["code"]
+    except Exception:
+        pass
+    try:
+        cookie_manager.delete(COOKIE_KEY)
+    except Exception:
+        pass
 
 def db_get_chats(code_hash):
-    with _db() as c:
-        rows = c.execute("SELECT id, title, messages, created, updated FROM chats WHERE code_hash=? ORDER BY updated DESC", (code_hash,)).fetchall()
-    out = {}
-    for r in rows:
-        out[r["id"]] = {"id": r["id"], "title": r["title"], "messages": json.loads(r["messages"]), "created": r["created"], "updated": r["updated"]}
-    return out
+    try:
+        with _db() as c:
+            rows = c.execute("SELECT id, title, messages, created, updated FROM chats WHERE code_hash=? ORDER BY updated DESC", (code_hash,)).fetchall()
+        out = {}
+        for r in rows:
+            out[r["id"]] = {"id": r["id"], "title": r["title"], "messages": json.loads(r["messages"]), "created": r["created"], "updated": r["updated"]}
+        return out
+    except Exception:
+        return {}
 
 def db_save_chat(code_hash, chat):
-    with _db() as c:
-        c.execute("INSERT INTO chats(id, code_hash, title, messages, created, updated) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated=excluded.updated", (chat["id"], code_hash, chat["title"], json.dumps(chat["messages"]), chat.get("created", time.time()), chat.get("updated", time.time())))
+    try:
+        with _db() as c:
+            c.execute("INSERT INTO chats(id, code_hash, title, messages, created, updated) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated=excluded.updated", (chat["id"], code_hash, chat["title"], json.dumps(chat["messages"]), chat.get("created", time.time()), chat.get("updated", time.time())))
+    except Exception:
+        pass
 
 def db_delete_chat(code_hash, chat_id):
-    with _db() as c:
-        c.execute("DELETE FROM chats WHERE id=? AND code_hash=?", (chat_id, code_hash))
+    try:
+        with _db() as c:
+            c.execute("DELETE FROM chats WHERE id=? AND code_hash=?", (chat_id, code_hash))
+    except Exception:
+        pass
 
 def db_delete_all_chats(code_hash):
-    with _db() as c:
-        c.execute("DELETE FROM chats WHERE code_hash=?", (code_hash,))
+    try:
+        with _db() as c:
+            c.execute("DELETE FROM chats WHERE code_hash=?", (code_hash,))
+    except Exception:
+        pass
 
 def db_get_settings(code_hash):
-    with _db() as c:
-        row = c.execute("SELECT language, model FROM settings WHERE code_hash=?", (code_hash,)).fetchone()
-    if row is None:
+    try:
+        with _db() as c:
+            row = c.execute("SELECT language, model FROM settings WHERE code_hash=?", (code_hash,)).fetchone()
+        if row is None:
+            return {"language": "en", "model": "groq"}
+        return {"language": row["language"], "model": row["model"]}
+    except Exception:
         return {"language": "en", "model": "groq"}
-    return {"language": row["language"], "model": row["model"]}
 
 def db_set_settings(code_hash, language=None, model=None):
-    cur = db_get_settings(code_hash)
-    language = language or cur["language"]
-    model = model or cur["model"]
-    with _db() as c:
-        c.execute("INSERT INTO settings(code_hash, language, model) VALUES(?, ?, ?) ON CONFLICT(code_hash) DO UPDATE SET language=excluded.language, model=excluded.model", (code_hash, language, model))
+    try:
+        cur = db_get_settings(code_hash)
+        language = language or cur["language"]
+        model = model or cur["model"]
+        with _db() as c:
+            c.execute("INSERT INTO settings(code_hash, language, model) VALUES(?, ?, ?) ON CONFLICT(code_hash) DO UPDATE SET language=excluded.language, model=excluded.model", (code_hash, language, model))
+    except Exception:
+        pass
 
 INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
 
@@ -478,6 +508,16 @@ UI_CSS = """
 .modal-btn.secondary:hover{background:#222;color:#fff;}
 .modal-btn.danger{background:#ff5555;color:#fff;}
 .modal-btn.danger:hover{background:#e04444;}
+.login-page{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:85vh;padding:20px;}
+.login-brand{font-size:3rem;font-weight:700;letter-spacing:8px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:8px;}
+.login-sub{color:#6b7280;font-size:0.9rem;margin-bottom:40px;letter-spacing:1px;}
+.login-box{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:32px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
+.login-label{font-size:0.72rem;text-transform:uppercase;letter-spacing:1.5px;color:#6a6a6a;margin-bottom:10px;font-weight:700;}
+.login-input-row{display:flex;gap:8px;margin-bottom:16px;}
+.login-divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:#4a4a4a;font-size:0.78rem;}
+.login-divider::before,.login-divider::after{content:'';flex:1;height:1px;background:#2a2a2a;}
+.login-error{background:#2a1a1a;border:1px solid #ff5555;border-radius:10px;padding:12px 16px;color:#ff8888;font-size:0.85rem;margin-bottom:16px;text-align:center;}
+.login-info{color:#6b7280;font-size:0.78rem;text-align:center;margin-top:16px;line-height:1.5;}
 """
 
 UI_JS = """
