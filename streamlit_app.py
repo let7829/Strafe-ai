@@ -25,17 +25,27 @@ MAX_ATTEMPTS = 5
 ATTEMPT_WINDOW = 600
 BAN_DURATION = 900
 COOLDOWN = 5
+HISTORY_LIMIT = 15
+
+GROQ_CHOICES = ("qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b")
+GROQ_DEFAULT = GROQ_CHOICES[0]
+PREFERRED = list(GROQ_CHOICES)
+SAFE_MODELS = set(GROQ_CHOICES) | {"llama-3.3-70b-versatile"}
+
+def _log(where, e):
+    print("[strafe] " + where + ": " + str(e), flush=True)
 
 if DB_PATH.exists():
     try:
         _tc = sqlite3.connect(str(DB_PATH))
         _tc.execute("SELECT code_hash FROM chats LIMIT 1")
         _tc.close()
-    except Exception:
+    except Exception as e:
+        _log("schema check", e)
         try:
             os.remove(str(DB_PATH))
-        except Exception:
-            pass
+        except Exception as e2:
+            _log("remove stale db", e2)
 
 def _db():
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
@@ -47,17 +57,19 @@ def db_init():
     stmts = [
         "CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, title TEXT NOT NULL, messages TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL)",
         "CREATE INDEX IF NOT EXISTS idx_chats_code ON chats(code_hash, updated DESC)",
-        "CREATE TABLE IF NOT EXISTS settings (code_hash TEXT PRIMARY KEY, language TEXT NOT NULL DEFAULT 'en', model TEXT NOT NULL DEFAULT 'groq')",
+        "CREATE TABLE IF NOT EXISTS settings (code_hash TEXT PRIMARY KEY, language TEXT NOT NULL DEFAULT 'en', model TEXT NOT NULL DEFAULT 'groq', groq_model TEXT NOT NULL DEFAULT 'qwen/qwen3.8-27b')",
         "CREATE TABLE IF NOT EXISTS codes (code_hash TEXT PRIMARY KEY, created REAL NOT NULL)",
         "CREATE TABLE IF NOT EXISTS ip_bans (ip TEXT PRIMARY KEY, ban_until REAL NOT NULL)",
         "CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL, attempted_at REAL NOT NULL, success INTEGER NOT NULL DEFAULT 0)",
         "CREATE INDEX IF NOT EXISTS idx_attempts_ip ON login_attempts(ip, attempted_at)",
+        "ALTER TABLE settings ADD COLUMN groq_model TEXT NOT NULL DEFAULT 'qwen/qwen3.8-27b'",
     ]
     for s in stmts:
         try:
             conn.execute(s)
-        except Exception:
-            pass
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                _log("db_init", e)
     conn.commit()
     conn.close()
 
@@ -75,15 +87,16 @@ def code_exists(code_hash):
         with _db() as c:
             row = c.execute("SELECT 1 FROM codes WHERE code_hash=?", (code_hash,)).fetchone()
         return row is not None
-    except Exception:
+    except Exception as e:
+        _log("code_exists", e)
         return False
 
 def create_code(code):
     try:
         with _db() as c:
             c.execute("INSERT OR IGNORE INTO codes(code_hash, created) VALUES(?, ?)", (hash_code(code), time.time()))
-    except Exception:
-        pass
+    except Exception as e:
+        _log("create_code", e)
 
 def get_ip():
     try:
@@ -97,7 +110,8 @@ def get_ip():
         if real_ip and real_ip.strip():
             return real_ip.strip()
         return None
-    except Exception:
+    except Exception as e:
+        _log("get_ip", e)
         return None
 
 def is_banned(ip):
@@ -106,13 +120,12 @@ def is_banned(ip):
     try:
         with _db() as c:
             row = c.execute("SELECT ban_until FROM ip_bans WHERE ip=?", (ip,)).fetchone()
-        if row and row["ban_until"] > time.time():
-            return True
-        if row and row["ban_until"] <= time.time():
-            with _db() as c:
+            if row and row["ban_until"] > time.time():
+                return True
+            if row:
                 c.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
-    except Exception:
-        pass
+    except Exception as e:
+        _log("is_banned", e)
     return False
 
 def get_cooldown(ip):
@@ -125,8 +138,8 @@ def get_cooldown(ip):
             elapsed = time.time() - row["attempted_at"]
             if elapsed < COOLDOWN:
                 return COOLDOWN - elapsed
-    except Exception:
-        pass
+    except Exception as e:
+        _log("get_cooldown", e)
     return 0
 
 def record_attempt(ip, success):
@@ -136,14 +149,13 @@ def record_attempt(ip, success):
     try:
         with _db() as c:
             c.execute("INSERT INTO login_attempts(ip, attempted_at, success) VALUES(?, ?, ?)", (ip, now, 1 if success else 0))
-            cutoff = now - ATTEMPT_WINDOW
-            c.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (cutoff,))
+            c.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (now - ATTEMPT_WINDOW,))
             if not success:
                 failed = c.execute("SELECT COUNT(*) FROM login_attempts WHERE ip=? AND attempted_at > ? AND success=0", (ip, now - ATTEMPT_WINDOW)).fetchone()[0]
                 if failed >= MAX_ATTEMPTS:
                     c.execute("INSERT OR REPLACE INTO ip_bans(ip, ban_until) VALUES(?, ?)", (ip, now + BAN_DURATION))
-    except Exception:
-        pass
+    except Exception as e:
+        _log("record_attempt", e)
 
 cookie_manager = stx.CookieManager()
 
@@ -152,49 +164,55 @@ def get_cookie_code():
         cookies = cookie_manager.get_all()
         if cookies and COOKIE_KEY in cookies:
             return cookies[COOKIE_KEY]
-    except Exception:
-        pass
+    except Exception as e:
+        _log("get_cookie_code", e)
     return None
 
 def set_cookie_code(code):
     try:
         cookie_manager.set(COOKIE_KEY, code, expires_at=datetime.now() + timedelta(days=365))
-    except Exception:
-        pass
+    except Exception as e:
+        _log("set_cookie_code", e)
 
 def get_url_code():
     return st.query_params.get("code")
 
-def set_url_code(code):
-    st.query_params["code"] = code
+def drop_url_code():
+    try:
+        del st.query_params["code"]
+    except Exception as e:
+        _log("drop_url_code", e)
 
 def get_active_code():
+    code = st.session_state.get("active_code")
+    if code and len(code) == CODE_LENGTH and code_exists(hash_code(code)):
+        return code
     url_code = get_url_code()
     if url_code:
+        drop_url_code()
         url_code = url_code.upper()
         if len(url_code) == CODE_LENGTH and code_exists(hash_code(url_code)):
+            st.session_state.active_code = url_code
+            set_cookie_code(url_code)
             return url_code
     cookie_code = get_cookie_code()
     if cookie_code:
         cookie_code = cookie_code.upper()
         if len(cookie_code) == CODE_LENGTH and code_exists(hash_code(cookie_code)):
-            set_url_code(cookie_code)
+            st.session_state.active_code = cookie_code
             return cookie_code
     return None
 
 def do_login(code):
-    set_url_code(code)
+    st.session_state.active_code = code
     set_cookie_code(code)
 
 def do_logout():
-    try:
-        del st.query_params["code"]
-    except Exception:
-        pass
+    st.session_state.clear()
     try:
         cookie_manager.delete(COOKIE_KEY)
-    except Exception:
-        pass
+    except Exception as e:
+        _log("do_logout", e)
 
 def db_get_chats(code_hash):
     try:
@@ -204,49 +222,54 @@ def db_get_chats(code_hash):
         for r in rows:
             out[r["id"]] = {"id": r["id"], "title": r["title"], "messages": json.loads(r["messages"]), "created": r["created"], "updated": r["updated"]}
         return out
-    except Exception:
+    except Exception as e:
+        _log("db_get_chats", e)
         return {}
 
 def db_save_chat(code_hash, chat):
     try:
         with _db() as c:
             c.execute("INSERT INTO chats(id, code_hash, title, messages, created, updated) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated=excluded.updated", (chat["id"], code_hash, chat["title"], json.dumps(chat["messages"]), chat.get("created", time.time()), chat.get("updated", time.time())))
-    except Exception:
-        pass
+    except Exception as e:
+        _log("db_save_chat", e)
 
 def db_delete_chat(code_hash, chat_id):
     try:
         with _db() as c:
             c.execute("DELETE FROM chats WHERE id=? AND code_hash=?", (chat_id, code_hash))
-    except Exception:
-        pass
+    except Exception as e:
+        _log("db_delete_chat", e)
 
 def db_delete_all_chats(code_hash):
     try:
         with _db() as c:
             c.execute("DELETE FROM chats WHERE code_hash=?", (code_hash,))
-    except Exception:
-        pass
+    except Exception as e:
+        _log("db_delete_all_chats", e)
 
 def db_get_settings(code_hash):
+    default = {"language": "en", "model": "groq", "groq_model": GROQ_DEFAULT}
     try:
         with _db() as c:
-            row = c.execute("SELECT language, model FROM settings WHERE code_hash=?", (code_hash,)).fetchone()
+            row = c.execute("SELECT language, model, groq_model FROM settings WHERE code_hash=?", (code_hash,)).fetchone()
         if row is None:
-            return {"language": "en", "model": "groq"}
-        return {"language": row["language"], "model": row["model"]}
-    except Exception:
-        return {"language": "en", "model": "groq"}
+            return default
+        gm = row["groq_model"] if row["groq_model"] in GROQ_CHOICES else GROQ_DEFAULT
+        return {"language": row["language"], "model": row["model"], "groq_model": gm}
+    except Exception as e:
+        _log("db_get_settings", e)
+        return default
 
-def db_set_settings(code_hash, language=None, model=None):
+def db_set_settings(code_hash, language=None, model=None, groq_model=None):
     try:
         cur = db_get_settings(code_hash)
         language = language or cur["language"]
         model = model or cur["model"]
+        groq_model = groq_model or cur["groq_model"]
         with _db() as c:
-            c.execute("INSERT INTO settings(code_hash, language, model) VALUES(?, ?, ?) ON CONFLICT(code_hash) DO UPDATE SET language=excluded.language, model=excluded.model", (code_hash, language, model))
-    except Exception:
-        pass
+            c.execute("INSERT INTO settings(code_hash, language, model, groq_model) VALUES(?, ?, ?, ?) ON CONFLICT(code_hash) DO UPDATE SET language=excluded.language, model=excluded.model, groq_model=excluded.groq_model", (code_hash, language, model, groq_model))
+    except Exception as e:
+        _log("db_set_settings", e)
 
 INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
 
@@ -508,16 +531,6 @@ UI_CSS = """
 .modal-btn.secondary:hover{background:#222;color:#fff;}
 .modal-btn.danger{background:#ff5555;color:#fff;}
 .modal-btn.danger:hover{background:#e04444;}
-.login-page{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:85vh;padding:20px;}
-.login-brand{font-size:3rem;font-weight:700;letter-spacing:8px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:8px;}
-.login-sub{color:#6b7280;font-size:0.9rem;margin-bottom:40px;letter-spacing:1px;}
-.login-box{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:32px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
-.login-label{font-size:0.72rem;text-transform:uppercase;letter-spacing:1.5px;color:#6a6a6a;margin-bottom:10px;font-weight:700;}
-.login-input-row{display:flex;gap:8px;margin-bottom:16px;}
-.login-divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:#4a4a4a;font-size:0.78rem;}
-.login-divider::before,.login-divider::after{content:'';flex:1;height:1px;background:#2a2a2a;}
-.login-error{background:#2a1a1a;border:1px solid #ff5555;border-radius:10px;padding:12px 16px;color:#ff8888;font-size:0.85rem;margin-bottom:16px;text-align:center;}
-.login-info{color:#6b7280;font-size:0.78rem;text-align:center;margin-top:16px;line-height:1.5;}
 """
 
 UI_JS = """
@@ -617,13 +630,44 @@ export default function(component){
             $langList.appendChild(item);
         });
     }
-    const MODELS=[{id:'groq',name:'Groq',desc:'Groq has strong coding/math skills. Also known for fast responses.',badge:'Auto on'},{id:'celeris',name:'Celeris',desc:'Celeris is considered to be the fastest model, outrun groq. The skills are currently unknown.',badge:''}];
-    function renderModels(){
-        const $modelList=$('#model-list');
-        $modelList.innerHTML='';
-        MODELS.forEach(m=>{
+    const PROVIDERS=[{id:'groq',name:'Groq',desc:'Groq has strong coding/math skills. Also known for fast responses.',badge:'Auto on'},{id:'celeris',name:'Gemma 4',desc:'Gemma 4 is quick and good at everyday chat, writing and simple code.',badge:''}];
+    const GROQ_MODELS=[{id:'qwen/qwen3.8-27b',name:'Qwen 3.8 27B'},{id:'openai/gpt-oss-120b',name:'OpenAI GPT-OSS 120B'},{id:'openai/gpt-oss-20b',name:'OpenAI GPT-OSS 20B'}];
+    function renderProviders(){
+        const $list=$('#model-list');
+        $list.innerHTML='';
+        PROVIDERS.forEach(p=>{
             const item=document.createElement('div');
-            item.className='radio-item'+(DATA.model===m.id?' selected':'');
+            item.className='radio-item'+(DATA.model===p.id?' selected':'');
+            const dot=document.createElement('div');
+            dot.className='radio-dot';
+            const text=document.createElement('div');
+            text.className='radio-text';
+            const title=document.createElement('div');
+            title.className='radio-title';
+            title.textContent=p.name;
+            if(p.badge){const badge=document.createElement('span');badge.className='badge';badge.textContent='('+p.badge+')';title.appendChild(badge);}
+            const desc=document.createElement('div');
+            desc.className='radio-desc';
+            desc.textContent=p.desc;
+            text.appendChild(title);
+            text.appendChild(desc);
+            item.appendChild(dot);
+            item.appendChild(text);
+            item.onclick=()=>{
+                if(DATA.model!==p.id){closeSettings();setTriggerValue('ui_action',{type:'set_model',model:p.id});}
+            };
+            $list.appendChild(item);
+        });
+    }
+    function renderGroqModels(){
+        const $gl=$('#groq-model-list');
+        const $wrap=$('#groq-models-section');
+        if(!$gl||!$wrap)return;
+        $wrap.style.display=DATA.model==='groq'?'block':'none';
+        $gl.innerHTML='';
+        GROQ_MODELS.forEach(m=>{
+            const item=document.createElement('div');
+            item.className='radio-item'+(DATA.groq_model===m.id?' selected':'');
             const dot=document.createElement('div');
             dot.className='radio-dot';
             const text=document.createElement('div');
@@ -631,18 +675,13 @@ export default function(component){
             const title=document.createElement('div');
             title.className='radio-title';
             title.textContent=m.name;
-            if(m.badge){const badge=document.createElement('span');badge.className='badge';badge.textContent='('+m.badge+')';title.appendChild(badge);}
-            const desc=document.createElement('div');
-            desc.className='radio-desc';
-            desc.textContent=m.desc;
             text.appendChild(title);
-            text.appendChild(desc);
             item.appendChild(dot);
             item.appendChild(text);
             item.onclick=()=>{
-                if(DATA.model!==m.id){closeSettings();setTriggerValue('ui_action',{type:'set_model',model:m.id});}
+                if(DATA.groq_model!==m.id){closeSettings();setTriggerValue('ui_action',{type:'set_groq_model',model:m.id});}
             };
-            $modelList.appendChild(item);
+            $gl.appendChild(item);
         });
     }
     $('#menu-btn').onclick=openSidebar;
@@ -672,12 +711,13 @@ export default function(component){
     applySettings();
     renderChats();
     renderLanguages();
-    renderModels();
+    renderProviders();
+    renderGroqModels();
     selectTab(ui.tab);
 }
 """
 
-def build_ui_html(data_json):
+def build_ui_html(data_json, code):
     parts = [
         '<div id="topbar">',
         '  <button id="menu-btn" class="tb-btn" type="button">&#9776;</button>',
@@ -714,16 +754,20 @@ def build_ui_html(data_json):
         '  </div>',
         '  <div class="tab-content" data-tab-content="models">',
         '    <div class="setting-section">',
-        '      <div class="setting-label">Models</div>',
+        '      <div class="setting-label">Providers</div>',
         '      <div id="model-list"></div>',
+        '    </div>',
+        '    <div class="setting-section" id="groq-models-section">',
+        '      <div class="setting-label">Groq models</div>',
+        '      <div id="groq-model-list"></div>',
         '    </div>',
         '  </div>',
         '  <div class="tab-content" data-tab-content="session">',
         '    <div class="setting-section">',
         '      <div class="setting-label">Your code</div>',
-        '      <div class="code-display" id="current-code">' + (st.query_params.get("code", "") if st.query_params.get("code") else "--------") + '</div>',
+        '      <div class="code-display" id="current-code">' + H.escape(code or "--------") + '</div>',
         '      <div id="code-copied" style="display:none;color:#4f8dff;font-size:0.82rem;text-align:center;margin-bottom:12px;">Copied to clipboard!</div>',
-        '      <div class="about-text">Click the code to copy. Share it to access your chats from another device.</div>',
+        '      <div class="about-text">Click the code to copy. Enter it on another device to open your chats there.</div>',
         '    </div>',
         '    <div class="setting-section">',
         '      <button class="setting-btn danger" id="logout-btn" type="button">Sign out</button>',
@@ -732,7 +776,7 @@ def build_ui_html(data_json):
         '  <div class="tab-content" data-tab-content="about">',
         '    <div class="setting-section">',
         '      <div class="setting-label">About</div>',
-        '      <div class="about-text">Strafe is a project made for your use, no data can be seen by anyone even by owner.</div>',
+        '      <div class="about-text">Strafe is a project made for your use. Chats are stored on the server and tied to your code, so keep your code private.</div>',
         '    </div>',
         '    <div class="setting-section">',
         '      <div class="setting-label">Danger Zone</div>',
@@ -753,7 +797,7 @@ def build_ui_html(data_json):
     return "\n".join(parts)
 
 def _code_hash():
-    return hash_code(st.query_params.get("code", ""))
+    return hash_code(st.session_state.get("active_code", ""))
 
 def _chat_store():
     ch = _code_hash()
@@ -792,6 +836,7 @@ def _persist_current_chat():
     title = ((first_user or {}).get("content") or "").strip().replace("\n", " ")[:48] or "New chat"
     chat = {"id": cid, "title": title, "messages": msgs, "created": st.session_state.get("chat_created", time.time()), "updated": time.time()}
     db_save_chat(ch, chat)
+    _chat_store()[cid] = chat
 
 def _get_chat_summaries():
     store = _chat_store()
@@ -813,6 +858,7 @@ def init_ui_state():
     s = db_get_settings(ch)
     st.session_state.setdefault("language", s["language"])
     st.session_state.setdefault("model_choice", s["model"])
+    st.session_state.setdefault("groq_model", s["groq_model"])
     store = _chat_store()
     cid = st.session_state.get("current_chat_id")
     if cid is None or cid not in store:
@@ -871,8 +917,7 @@ def handle_action(action):
     elif t == "delete_all_chats":
         _reset()
         db_delete_all_chats(ch)
-        cache_key = "chats_" + ch
-        st.session_state[cache_key] = {}
+        st.session_state["chats_" + ch] = {}
         st.session_state.pop("current_chat_id", None)
         st.session_state.pop("messages", None)
         init_ui_state()
@@ -883,11 +928,17 @@ def handle_action(action):
             db_set_settings(ch, language=lang)
     elif t == "set_model":
         model = get_action_field(action, "model")
-        if model:
+        if model in ("groq", "celeris"):
             st.session_state.model_choice = model
             db_set_settings(ch, model=model)
+    elif t == "set_groq_model":
+        gm = get_action_field(action, "model")
+        if gm in GROQ_CHOICES:
+            st.session_state.groq_model = gm
+            db_set_settings(ch, groq_model=gm)
     elif t == "logout":
         do_logout()
+        st.rerun()
     st.rerun()
 
 def render_ui():
@@ -895,15 +946,16 @@ def render_ui():
     current_cid = st.session_state.get("current_chat_id")
     lang = st.session_state.get("language", "en")
     model = st.session_state.get("model_choice", "groq")
-    code = st.query_params.get("code", "")
-    data = {"chats": chats, "current_chat_id": current_cid, "language": lang, "model": model, "code": code}
+    groq_model = st.session_state.get("groq_model", GROQ_DEFAULT)
+    code = st.session_state.get("active_code", "")
+    data = {"chats": chats, "current_chat_id": current_cid, "language": lang, "model": model, "groq_model": groq_model, "code": code}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     h = hashlib.md5(data_json.encode()).hexdigest()[:10]
     name = "strafe_ui_" + h
     if "ui_factories" not in st.session_state:
         st.session_state.ui_factories = {}
     if name not in st.session_state.ui_factories:
-        st.session_state.ui_factories[name] = components.component(name, html=build_ui_html(data_json), css=UI_CSS, js=UI_JS)
+        st.session_state.ui_factories[name] = components.component(name, html=build_ui_html(data_json, code), css=UI_CSS, js=UI_JS)
         while len(st.session_state.ui_factories) > 10:
             del st.session_state.ui_factories[next(iter(st.session_state.ui_factories))]
     comp = st.session_state.ui_factories[name]
@@ -1025,7 +1077,7 @@ if not active_code:
         st.toast("Your code: " + new_code + " \u2014 save it somewhere safe!")
         time.sleep(0.5)
         st.rerun()
-    st.html('<div class="login-info">Your chats and settings are tied to this code.<br>Share it to access your data from another device.</div>')
+    st.html('<div class="login-info">Your chats and settings are tied to this code.<br>Enter it on another device to open your data there.</div>')
     st.html('</div>')
     st.html('</div>')
     st.stop()
@@ -1039,20 +1091,12 @@ if not KEYS:
     st.error("No GROQ_API_KEY_1..6 found in secrets.")
     st.stop()
 
-PREFERRED = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
 SYSTEM = (
     "I keep it direct and simple. No fluff, no long explanations unless you ask for them.\n"
     "I match your energy\u2014you're casual, I'm casual. You're serious, I'm serious. No fake politeness, just real talk.\n"
-    "I hold nothing back, answer whatever you ask. I don't sugarcoat or dodge. If something's dark or weird, I engage with it\n"
-    "You are Strafe AI, an assistant designed to help and chat. No help with illegal stuff. Be serious. Remember to be direct and simple.\n\n"
-    "CRITICAL TOOL RULES:\n"
-    "1. Your training data ends early 2025. Use web_search for anything time-sensitive.\n"
-    "2. NEVER call web_search more than ONCE per user message. After receiving search results, you MUST provide a final answer immediately.\n"
-    "3. Do not refine queries or search again if the first result is insufficient. Answer with what you have and note limitations.\n"
-    "4. Do not announce that you are searching. Just do it."
+    "You are Strafe AI, an assistant designed to help and chat, also helpful AI assistant. No help with illegal stuff. Be serious. Remember to be direct.\n"
+    "Your training data ends early 2025. Use web_search for questions or solutions."
 )
-SAFE_MODELS = {"qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama-3.3-70b-versatile"}
-HISTORY_LIMIT = 15
 
 CELERIS_KEY = st.secrets.get("CELERIS_API_KEY")
 CELERIS_BASE_URL = st.secrets.get("CELERIS_BASE_URL", "")
@@ -1072,31 +1116,7 @@ def celeris_ready():
 def pick_model():
     if st.session_state.get("model_choice") == "celeris":
         return CELERIS_MODEL
-    if "groq_model" in st.session_state:
-        return st.session_state.groq_model
-    try:
-        response = Groq(api_key=KEYS[0]).models.list()
-        avail = set()
-        for m in response.data:
-            mid = m.id if hasattr(m, "id") else str(m)
-            avail.add(mid)
-    except Exception:
-        avail = set()
-    for p in PREFERRED:
-        if p in avail:
-            st.session_state.groq_model = p
-            return p
-    safe_avail = avail & SAFE_MODELS
-    if safe_avail:
-        chosen = list(safe_avail)[0]
-        st.session_state.groq_model = chosen
-        return chosen
-    if avail:
-        chosen = list(avail)[0]
-        st.session_state.groq_model = chosen
-        return chosen
-    st.session_state.groq_model = PREFERRED[0]
-    return PREFERRED[0]
+    return st.session_state.get("groq_model", GROQ_DEFAULT)
 
 def mark_key_failed(key):
     if "failed_keys" not in st.session_state:
@@ -1139,8 +1159,8 @@ def web_search(query, num_results=3):
                 if href.startswith("//duckduckgo.com/l/?uddg="):
                     try:
                         href = unquote(href.split("uddg=", 1)[1].split("&", 1)[0])
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _log("web_search unquote", e)
                 title = a.get_text(strip=True)
                 parent = a.find_parent("div", class_="result")
                 snippet = ""
@@ -1170,21 +1190,16 @@ def msg_to_api(m, distance_from_latest=None):
         parts.insert(0, {"type": "text", "text": "[Attached file: " + fname + "]\n```\n" + fcontent + "\n```"})
     if imgs:
         imgs = imgs[:3]
-        if distance_from_latest is not None:
-            if distance_from_latest < 2:
-                for u in imgs:
-                    parts.append({"type": "image_url", "image_url": {"url": u}})
-            else:
-                for u in imgs:
-                    parts.append({"type": "image_url", "image_url": {"url": u, "detail": "low"}})
-        else:
-            for u in imgs:
-                parts.append({"type": "image_url", "image_url": {"url": u, "detail": "low"}})
+        close = distance_from_latest is not None and distance_from_latest < 2
+        for u in imgs:
+            img = {"url": u} if close else {"url": u, "detail": "low"}
+            parts.append({"type": "image_url", "image_url": img})
     return {"role": m["role"], "content": parts}
 
 def build_payload(history):
     model = pick_model()
-    msgs = [{"role": "system", "content": SYSTEM}] + history
+    system_text = SYSTEM + "\nToday is " + datetime.now().strftime("%Y-%m-%d") + "."
+    msgs = [{"role": "system", "content": system_text}] + history
     if st.session_state.get("model_choice") == "celeris":
         return dict(model=model, messages=msgs, max_tokens=1024, temperature=0.7)
     kw = dict(model=model, messages=msgs, max_completion_tokens=2048, temperature=0.7)
@@ -1204,10 +1219,8 @@ def call_groq_with_retry(kwargs):
         try:
             return Groq(api_key=key).chat.completions.create(**kwargs), None
         except NotFoundError:
-            st.session_state.pop("groq_model", None)
-            mark_key_failed(key)
-            last_err = "model gone"
-            continue
+            last_err = "Model " + str(kwargs.get("model")) + " is not available on Groq."
+            break
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "401" in err_str:
@@ -1221,26 +1234,21 @@ def ask(use_search=False, use_think=False, look_back=False):
     if use_celeris and not celeris_ready():
         raise RuntimeError("Celeris not configured.")
     if use_celeris and use_search:
-        st.toast("Celeris doesn't support search - disabled for this message")
+        st.toast("Gemma 4 doesn't support search. Disabled for this message.")
         use_search = False
     t0 = time.time()
     slice_msgs = st.session_state.messages if look_back else st.session_state.messages[-HISTORY_LIMIT:]
     total = len(slice_msgs)
-    history = []
-    for idx, m in enumerate(slice_msgs):
-        distance = total - 1 - idx
-        history.append(msg_to_api(m, distance_from_latest=distance))
+    history = [msg_to_api(m, distance_from_latest=total - 1 - idx) for idx, m in enumerate(slice_msgs)]
     tools = None
     if use_search:
         tools = [{"type": "function", "function": {"name": "web_search", "description": "Search the web for current info. Use for recent events, news, prices, sports. DO NOT fake the search.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Clean keywords ONLY. Fix spelling."}}, "required": ["query"]}}}]
-    max_rounds = 2 if use_search else 1
-    tool_calls_made = 0
-    last_err = None
-    last_round_had_tool_call = False
-    for round_idx in range(max_rounds):
+    for round_idx in range(2 if tools else 1):
         kwargs = build_payload(history)
         if tools:
             kwargs["tools"] = tools
+            if round_idx > 0:
+                kwargs["tool_choice"] = "none"
         if use_celeris:
             try:
                 r = get_celeris_client().chat.completions.create(**kwargs)
@@ -1251,40 +1259,30 @@ def ask(use_search=False, use_think=False, look_back=False):
         else:
             r, err = call_groq_with_retry(kwargs)
         if r is None:
-            last_err = err
-            break
+            raise RuntimeError(err or "All API keys failed")
         msg = r.choices[0].message
-        if tools and getattr(msg, "tool_calls", None):
-            tool_calls_made += len(msg.tool_calls)
-            if tool_calls_made > 5:
-                raise RuntimeError("Max tool rounds exceeded")
-            if round_idx == max_rounds - 1:
-                last_round_had_tool_call = True
-            assistant_msg = {"role": "assistant", "content": msg.content or "", "tool_calls": []}
-            for tc in msg.tool_calls:
-                assistant_msg["tool_calls"].append({"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}})
-            history.append(assistant_msg)
-            for tc in msg.tool_calls:
+        calls = getattr(msg, "tool_calls", None) if tools and round_idx == 0 else None
+        if calls:
+            history.append({"role": "assistant", "content": msg.content or "", "tool_calls": [{"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in calls]})
+            for tc in calls:
+                query = ""
                 if tc.function.name == "web_search":
                     try:
                         args = json.loads(tc.function.arguments)
                         query = args.get("query", "") if isinstance(args, dict) else ""
-                    except Exception:
-                        query = ""
+                    except Exception as e:
+                        _log("tool args", e)
                     results = web_search(query)
                     context = "\n".join(res["title"] + ": " + res["snippet"] + " (" + res["link"] + ")" for res in results)
                     history.append({"role": "tool", "tool_call_id": tc.id, "content": context})
             continue
-        else:
-            content = (msg.content or "").strip()
-            reasoning = getattr(msg, "reasoning_content", None)
-            secs = max(0.1, time.time() - t0)
-            used = (r.usage.total_tokens if r.usage else 0)
-            tps = round(used / secs, 1) if used else 0
-            return {"content": content, "secs": round(secs, 1), "tok": str(tps) + " tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": reasoning if use_think else None}
-    if last_round_had_tool_call:
-        raise RuntimeError("Model kept calling tools without producing a final answer")
-    raise RuntimeError(last_err or "All API keys failed")
+        content = (msg.content or "").strip()
+        reasoning = getattr(msg, "reasoning_content", None)
+        secs = max(0.1, time.time() - t0)
+        used = r.usage.total_tokens if r.usage else 0
+        tps = round(used / secs, 1) if used else 0
+        return {"content": content, "secs": round(secs, 1), "tok": str(tps) + " tok/s", "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "reasoning": reasoning if use_think else None}
+    raise RuntimeError("No final answer produced.")
 
 def info_html(m):
     sent = m.get("sent", "?")
@@ -1321,14 +1319,13 @@ pending = st.session_state.pop("pending", None)
 if pending is not None:
     if st.session_state.get("editing") is not None:
         st.session_state["editing"] = None
-        st.toast("Edit cancelled - message sent instead")
+        st.toast("Edit cancelled. Message sent instead.")
     text = pending.get("text", "") if isinstance(pending, dict) else pending
     use_search = pending.get("search", False) if isinstance(pending, dict) else False
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
     images = pending.get("images", []) if isinstance(pending, dict) else []
     files = pending.get("files", []) if isinstance(pending, dict) else []
-    raw = text.strip().lower()
-    is_look_back = raw == "look_back"
+    is_look_back = text.strip().lower() == "look_back"
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "images": images, "files": files})
     try:
         result = ask(use_search=use_search, use_think=use_think, look_back=is_look_back)
@@ -1372,12 +1369,8 @@ for i, m in enumerate(st.session_state.messages):
         reasoning = m.get("reasoning")
         if m.get("think"):
             think_secs = m.get("secs", "?")
-            if reasoning:
-                with st.expander("\u269b Thought for " + str(think_secs) + "s", expanded=False):
-                    st.markdown(reasoning)
-            else:
-                with st.expander("\u269b Thought for " + str(think_secs) + "s", expanded=False):
-                    st.markdown("_Model processed the request but didn't return visible thoughts._")
+            with st.expander("\u269b Thought for " + str(think_secs) + "s", expanded=False):
+                st.markdown(reasoning or "_Model processed the request but didn't return visible thoughts._")
         with st.chat_message("assistant"):
             st.markdown(m["content"])
         _mn, _sp = st.columns([1, 3])
