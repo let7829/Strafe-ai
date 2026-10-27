@@ -31,6 +31,17 @@ GROQ_CHOICES = ("qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b")
 GROQ_DEFAULT = GROQ_CHOICES[0]
 PREFERRED = list(GROQ_CHOICES)
 SAFE_MODELS = set(GROQ_CHOICES) | {"llama-3.3-70b-versatile"}
+LANG_NAMES = {"en": "English", "ru": "Russian", "uk": "Ukrainian"}
+
+T_PY = {
+    "en": {"edit": "Edit", "retry": "Retry", "copy": "Copy", "copied": "Copied"},
+    "ru": {"edit": "Изменить", "retry": "Повторить", "copy": "Копировать", "copied": "Скопировано"},
+    "uk": {"edit": "Редагувати", "retry": "Повторити", "copy": "Копіювати", "copied": "Скопійовано"},
+}
+
+def tp(key):
+    lang = st.session_state.get("language", "en")
+    return T_PY.get(lang, T_PY["en"])[key]
 
 def _log(where, e):
     print("[strafe] " + where + ": " + str(e), flush=True)
@@ -55,7 +66,7 @@ def _db():
 def db_init():
     conn = _db()
     stmts = [
-        "CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, title TEXT NOT NULL, messages TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, title TEXT NOT NULL, messages TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, custom_title TEXT)",
         "CREATE INDEX IF NOT EXISTS idx_chats_code ON chats(code_hash, updated DESC)",
         "CREATE TABLE IF NOT EXISTS settings (code_hash TEXT PRIMARY KEY, language TEXT NOT NULL DEFAULT 'en', model TEXT NOT NULL DEFAULT 'groq', groq_model TEXT NOT NULL DEFAULT 'qwen/qwen3.8-27b')",
         "CREATE TABLE IF NOT EXISTS codes (code_hash TEXT PRIMARY KEY, created REAL NOT NULL)",
@@ -63,6 +74,7 @@ def db_init():
         "CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL, attempted_at REAL NOT NULL, success INTEGER NOT NULL DEFAULT 0)",
         "CREATE INDEX IF NOT EXISTS idx_attempts_ip ON login_attempts(ip, attempted_at)",
         "ALTER TABLE settings ADD COLUMN groq_model TEXT NOT NULL DEFAULT 'qwen/qwen3.8-27b'",
+        "ALTER TABLE chats ADD COLUMN custom_title TEXT",
     ]
     for s in stmts:
         try:
@@ -217,10 +229,10 @@ def do_logout():
 def db_get_chats(code_hash):
     try:
         with _db() as c:
-            rows = c.execute("SELECT id, title, messages, created, updated FROM chats WHERE code_hash=? ORDER BY updated DESC", (code_hash,)).fetchall()
+            rows = c.execute("SELECT id, title, messages, created, updated, custom_title FROM chats WHERE code_hash=? ORDER BY updated DESC", (code_hash,)).fetchall()
         out = {}
         for r in rows:
-            out[r["id"]] = {"id": r["id"], "title": r["title"], "messages": json.loads(r["messages"]), "created": r["created"], "updated": r["updated"]}
+            out[r["id"]] = {"id": r["id"], "title": r["title"], "messages": json.loads(r["messages"]), "created": r["created"], "updated": r["updated"], "custom_title": r["custom_title"]}
         return out
     except Exception as e:
         _log("db_get_chats", e)
@@ -229,9 +241,16 @@ def db_get_chats(code_hash):
 def db_save_chat(code_hash, chat):
     try:
         with _db() as c:
-            c.execute("INSERT INTO chats(id, code_hash, title, messages, created, updated) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated=excluded.updated", (chat["id"], code_hash, chat["title"], json.dumps(chat["messages"]), chat.get("created", time.time()), chat.get("updated", time.time())))
+            c.execute("INSERT INTO chats(id, code_hash, title, messages, created, updated, custom_title) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title=excluded.title, messages=excluded.messages, updated=excluded.updated, custom_title=excluded.custom_title", (chat["id"], code_hash, chat["title"], json.dumps(chat["messages"]), chat.get("created", time.time()), chat.get("updated", time.time()), chat.get("custom_title")))
     except Exception as e:
         _log("db_save_chat", e)
+
+def db_rename_chat(code_hash, chat_id, title):
+    try:
+        with _db() as c:
+            c.execute("UPDATE chats SET title=?, custom_title=? WHERE id=? AND code_hash=?", (title, title, chat_id, code_hash))
+    except Exception as e:
+        _log("db_rename_chat", e)
 
 def db_delete_chat(code_hash, chat_id):
     try:
@@ -457,6 +476,29 @@ export default function(component){
 
 chat_input = components.component("strafe_chat_input", html=INPUT_HTML, css=INPUT_CSS, js=INPUT_JS)
 
+COPY_CSS = """
+.cp-btn{width:100%;height:40px;border-radius:14px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;padding:0 18px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;box-sizing:border-box;}
+.cp-btn:hover{border-color:#4f8dff;color:#fff;}
+"""
+
+COPY_JS = """
+export default function(component){
+    const {parentElement}=component;
+    const btn=parentElement.querySelector('#cp');
+    const dataEl=parentElement.querySelector('#strafe-copy-data');
+    if(!btn||!dataEl)return;
+    const TEXT=JSON.parse(dataEl.textContent).t;
+    const label=btn.dataset.label;
+    const done=btn.dataset.done;
+    btn.onclick=()=>{
+        navigator.clipboard.writeText(TEXT).then(()=>{
+            btn.textContent=done;
+            setTimeout(()=>{btn.textContent=label;},1200);
+        }).catch(()=>{});
+    };
+}
+"""
+
 UI_CSS = """
 #topbar{position:fixed;top:0;left:0;right:0;height:56px;padding:0 14px;display:flex;align-items:center;gap:10px;z-index:999998;background:linear-gradient(to bottom,rgba(10,10,10,0.96),rgba(10,10,10,0));pointer-events:none;font-family:'Space Grotesk',sans-serif;}
 #topbar > *{pointer-events:auto;}
@@ -480,6 +522,8 @@ UI_CSS = """
 .chat-item:hover{background:#1a1a1a;color:#fff;}
 .chat-item.active{background:#1a2030;color:#fff;border-left:2px solid #4f8dff;padding-left:10px;}
 .chat-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.chat-edit{width:22px;height:22px;border-radius:50%;border:none;background:transparent;color:#7a7a7a;font-size:0.8rem;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;transition:all 0.15s;}
+.chat-edit:hover{color:#fff;background:#2a2a2a;}
 .chat-del{width:22px;height:22px;border-radius:50%;border:none;background:transparent;color:#5a5a5a;font-size:0.72rem;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;transition:all 0.15s;}
 .chat-del:hover{color:#ff5555;background:#2a1a1a;}
 .empty-chats{padding:24px 16px;color:#4a4a4a;font-size:0.84rem;text-align:center;line-height:1.5;}
@@ -523,12 +567,16 @@ UI_CSS = """
 .code-display:hover{border-color:#4f8dff;}
 .modal{position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.72);z-index:1000010;display:none;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;font-family:'Space Grotesk',sans-serif;backdrop-filter:blur(4px);}
 .modal.open{display:flex;}
-.modal-content{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
+.modal-content{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:24px;max-width:400px;width:100%;box-sizing:border-box;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
 .modal-title{font-size:1.15rem;color:#fff;font-weight:600;margin:0 0 8px 0;}
 .modal-text{font-size:0.88rem;color:#8a8a8a;line-height:1.55;margin:0 0 20px 0;}
+.modal-input{width:100%;height:44px;border-radius:12px;border:1px solid #2a2a2a;background:#0a0a0a;color:#fff;font-size:0.95rem;font-family:'Space Grotesk',sans-serif;padding:0 14px;box-sizing:border-box;margin-bottom:16px;outline:none;transition:border-color 0.2s;}
+.modal-input:focus{border-color:#4f8dff;box-shadow:0 0 0 3px rgba(79,141,255,0.15);}
 .modal-btn{width:100%;height:44px;border-radius:10px;border:none;font-size:0.95rem;font-family:'Space Grotesk',sans-serif;cursor:pointer;margin-bottom:8px;transition:all 0.2s;font-weight:500;}
 .modal-btn.secondary{background:#1a1a1a;color:#bdbdbd;border:1px solid #2a2a2a;}
 .modal-btn.secondary:hover{background:#222;color:#fff;}
+.modal-btn.primary{background:#4f8dff;color:#fff;}
+.modal-btn.primary:hover{background:#2563eb;}
 .modal-btn.danger{background:#ff5555;color:#fff;}
 .modal-btn.danger:hover{background:#e04444;}
 """
@@ -541,10 +589,17 @@ export default function(component){
     const dataEl=$('#strafe-data');
     if(!dataEl)return;
     const DATA=JSON.parse(dataEl.textContent);
+    const I18N={
+        en:{your_chats:'YOUR CHATS',new_chat:'New chat',no_chats:'No chats yet',settings:'Settings',language:'Language',models:'Models',session:'Session',about:'About',providers:'Providers',groq_models:'Groq models',your_code:'Your code',copy_hint:'Click the code to copy. Enter it on another device to open your chats there.',copied:'Copied to clipboard!',sign_out:'Sign out',about_text:'Strafe is a project made for your use. Chats are stored on the server and tied to your code, so keep your code private.',danger:'Danger Zone',delete_all:'Delete all chats',yes:'Yes',cancel:'Cancel',save:'Save',rename_chat:'Rename chat',delete_chat_q:'Delete chat?',delete_chat_t:'Are you sure you want to delete this chat? This cannot be undone.',delete_all_q:'Delete all chats?',delete_all_t:'Are you sure you want to delete ALL chats? This cannot be undone.',sign_out_q:'Sign out?',sign_out_t:'You will return to the login page. Your chats are saved.',auto_on:'Auto on',lang_en:'English',lang_ru:'Russian',lang_uk:'Ukrainian'},
+        ru:{your_chats:'ВАШИ ЧАТЫ',new_chat:'Новый чат',no_chats:'Чатов пока нет',settings:'Настройки',language:'Язык',models:'Модели',session:'Сессия',about:'О приложении',providers:'Провайдеры',groq_models:'Модели Groq',your_code:'Ваш код',copy_hint:'Нажмите на код, чтобы скопировать. Введите его на другом устройстве, чтобы открыть свои чаты.',copied:'Скопировано в буфер обмена!',sign_out:'Выйти',about_text:'Strafe — проект для вашего личного использования. Чаты хранятся на сервере и привязаны к вашему коду, поэтому держите код в секрете.',danger:'Опасная зона',delete_all:'Удалить все чаты',yes:'Да',cancel:'Отмена',save:'Сохранить',rename_chat:'Переименовать чат',delete_chat_q:'Удалить чат?',delete_chat_t:'Вы уверены, что хотите удалить этот чат? Это нельзя отменить.',delete_all_q:'Удалить все чаты?',delete_all_t:'Вы уверены, что хотите удалить ВСЕ чаты? Это нельзя отменить.',sign_out_q:'Выйти?',sign_out_t:'Вы вернётесь на страницу входа. Ваши чаты сохранены.',auto_on:'Авто',lang_en:'English',lang_ru:'Русский',lang_uk:'Українська'},
+        uk:{your_chats:'ВАШІ ЧАТИ',new_chat:'Новий чат',no_chats:'Чатів поки немає',settings:'Налаштування',language:'Мова',models:'Моделі',session:'Сесія',about:'Про застосунок',providers:'Провайдери',groq_models:'Моделі Groq',your_code:'Ваш код',copy_hint:'Натисніть на код, щоб скопіювати. Введіть його на іншому пристрої, щоб відкрити свої чати.',copied:'Скопійовано в буфер обміну!',sign_out:'Вийти',about_text:'Strafe — проєкт для вашого особистого використання. Чати зберігаються на сервері й прив’язані до вашого коду, тож тримайте код у таємниці.',danger:'Небезпечна зона',delete_all:'Видалити всі чати',yes:'Так',cancel:'Скасувати',save:'Зберегти',rename_chat:'Перейменувати чат',delete_chat_q:'Видалити чат?',delete_chat_t:'Ви впевнені, що хочете видалити цей чат? Це не можна скасувати.',delete_all_q:'Видалити всі чати?',delete_all_t:'Ви впевнені, що хочете видалити ВСІ чати? Це не можна скасувати.',sign_out_q:'Вийти?',sign_out_t:'Ви повернетеся на сторінку входу. Ваші чати збережено.',auto_on:'Авто',lang_en:'English',lang_ru:'Русский',lang_uk:'Українська'}
+    };
+    const LANG=I18N[DATA.language]?DATA.language:'en';
+    function t(k){return (I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;}
+    function applyI18n(){$$('[data-i18n]').forEach(el=>{el.textContent=t(el.dataset.i18n);});}
     function getLS(k,d){try{return localStorage.getItem(k)||d;}catch(e){return d;}}
     function setLS(k,v){try{localStorage.setItem(k,v);}catch(e){}}
-    let savedTab=getLS('strafe_tab','language');
-    let ui={sidebarOpen:getLS('strafe_sidebar','0')==='1',settingsOpen:getLS('strafe_settings','0')==='1',tab:savedTab};
+    let ui={sidebarOpen:getLS('strafe_sidebar','0')==='1',settingsOpen:getLS('strafe_settings','0')==='1',tab:getLS('strafe_tab','language')};
     function saveUI(){setLS('strafe_sidebar',ui.sidebarOpen?'1':'0');setLS('strafe_settings',ui.settingsOpen?'1':'0');setLS('strafe_tab',ui.tab);}
     const $sidebar=$('#sidebar');
     const $sidebarBackdrop=$('#sidebar-backdrop');
@@ -554,19 +609,21 @@ export default function(component){
     const $confirmModal=$('#confirm-modal');
     const $confirmTitle=$('#confirm-title');
     const $confirmText=$('#confirm-text');
+    const $renameModal=$('#rename-modal');
+    const $renameInput=$('#rename-input');
     function openSidebar(){ui.sidebarOpen=true;saveUI();applySidebar();}
     function closeSidebar(){ui.sidebarOpen=false;saveUI();applySidebar();}
     function applySidebar(){$sidebar.classList.toggle('open',ui.sidebarOpen);$sidebarBackdrop.classList.toggle('open',ui.sidebarOpen);}
     function openSettings(){ui.settingsOpen=true;saveUI();applySettings();}
     function closeSettings(){ui.settingsOpen=false;saveUI();applySettings();}
     function applySettings(){$settingsPanel.classList.toggle('open',ui.settingsOpen);$settingsBackdrop.classList.toggle('open',ui.settingsOpen);}
-    function selectTab(t){
+    function selectTab(tb){
         const valid=['language','models','session','about'];
-        if(!valid.includes(t))t='language';
-        ui.tab=t;
+        if(!valid.includes(tb))tb='language';
+        ui.tab=tb;
         saveUI();
-        $$('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));
-        $$('.tab-content').forEach(el=>el.classList.toggle('active',el.dataset.tabContent===t));
+        $$('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===tb));
+        $$('.tab-content').forEach(el=>el.classList.toggle('active',el.dataset.tabContent===tb));
     }
     $$('.tab').forEach(el=>el.addEventListener('click',()=>selectTab(el.dataset.tab)));
     let confirmCallback=null;
@@ -574,39 +631,63 @@ export default function(component){
     function closeConfirm(){$confirmModal.classList.remove('open');confirmCallback=null;}
     $('#confirm-yes').onclick=()=>{if(confirmCallback)confirmCallback();};
     $('#confirm-no').onclick=closeConfirm;
+    let renameId=null;
+    function openRename(c){renameId=c.id;$renameInput.value=c.title||'';$renameModal.classList.add('open');setTimeout(()=>$renameInput.focus(),60);}
+    function closeRename(){$renameModal.classList.remove('open');renameId=null;}
+    function submitRename(){
+        const v=$renameInput.value.trim();
+        const id=renameId;
+        closeRename();
+        if(!v||!id)return;
+        closeSidebar();
+        setTriggerValue('ui_action',{type:'rename_chat',chat_id:id,title:v});
+    }
+    $('#rename-save').onclick=submitRename;
+    $('#rename-cancel').onclick=closeRename;
+    $renameInput.onkeydown=(e)=>{if(e.key==='Enter')submitRename();if(e.key==='Escape')closeRename();};
     function renderChats(){
         $chatList.innerHTML='';
         const chats=DATA.chats||[];
-        if(chats.length===0){const empty=document.createElement('div');empty.className='empty-chats';empty.textContent='No chats yet';$chatList.appendChild(empty);return;}
+        if(chats.length===0){const empty=document.createElement('div');empty.className='empty-chats';empty.textContent=t('no_chats');$chatList.appendChild(empty);return;}
         chats.forEach(c=>{
             const item=document.createElement('div');
-            item.className='chat-item'+(c.id===DATA.current_chat_id?' active':'');
+            const isActive=c.id===DATA.current_chat_id;
+            item.className='chat-item'+(isActive?' active':'');
             const title=document.createElement('span');
             title.className='chat-title';
-            title.textContent=c.title||'New chat';
+            title.textContent=c.title||t('new_chat');
+            item.appendChild(title);
+            if(isActive){
+                const ed=document.createElement('button');
+                ed.className='chat-edit';
+                ed.type='button';
+                ed.title=t('rename_chat');
+                ed.textContent='\\u270E';
+                ed.onclick=(ev)=>{ev.stopPropagation();openRename(c);};
+                item.appendChild(ed);
+            }
             const del=document.createElement('button');
             del.className='chat-del';
             del.type='button';
             del.textContent='\\u2715';
             del.onclick=(ev)=>{
                 ev.stopPropagation();
-                showConfirm('Delete chat?','Are you sure you want to delete this chat? This cannot be undone.',()=>{
+                showConfirm(t('delete_chat_q'),t('delete_chat_t'),()=>{
                     closeConfirm();
                     closeSidebar();
                     setTriggerValue('ui_action',{type:'delete_chat',chat_id:c.id});
                 });
             };
-            item.appendChild(title);
             item.appendChild(del);
             item.onclick=()=>{
-                if(c.id===DATA.current_chat_id){closeSidebar();return;}
+                if(isActive){closeSidebar();return;}
                 closeSidebar();
                 setTriggerValue('ui_action',{type:'open_chat',chat_id:c.id});
             };
             $chatList.appendChild(item);
         });
     }
-    const LANGUAGES=[{id:'en',name:'English',desc:'Auto on'},{id:'ru',name:'Russian',desc:''},{id:'uk',name:'Ukrainian',desc:''}];
+    const LANGUAGES=[{id:'en',name:t('lang_en'),desc:t('auto_on')},{id:'ru',name:t('lang_ru'),desc:''},{id:'uk',name:t('lang_uk'),desc:''}];
     function renderLanguages(){
         const $langList=$('#lang-list');
         $langList.innerHTML='';
@@ -692,14 +773,14 @@ export default function(component){
     $('#settings-close').onclick=closeSettings;
     $settingsBackdrop.onclick=closeSettings;
     $('#delete-all-btn').onclick=()=>{
-        showConfirm('Delete all chats?','Are you sure you want to delete ALL chats? This cannot be undone.',()=>{
+        showConfirm(t('delete_all_q'),t('delete_all_t'),()=>{
             closeConfirm();
             closeSettings();
             setTriggerValue('ui_action',{type:'delete_all_chats'});
         });
     };
     $('#logout-btn').onclick=()=>{
-        showConfirm('Sign out?','You will return to the login page. Your chats are saved.',()=>{
+        showConfirm(t('sign_out_q'),t('sign_out_t'),()=>{
             closeConfirm();
             closeSettings();
             setTriggerValue('ui_action',{type:'logout'});
@@ -707,6 +788,7 @@ export default function(component){
     };
     const codeEl=$('#current-code');
     if(codeEl){codeEl.onclick=function(){navigator.clipboard.writeText(DATA.code).then(()=>{var el=$('#code-copied');if(el){el.style.display='block';setTimeout(function(){el.style.display='none';},1500);}});};}
+    applyI18n();
     applySidebar();
     applySettings();
     renderChats();
@@ -725,62 +807,62 @@ def build_ui_html(data_json, code):
         '<div id="sidebar-backdrop"></div>',
         '<aside id="sidebar">',
         '  <div class="sidebar-header">',
-        '    <span class="sidebar-title">YOUR CHATS</span>',
+        '    <span class="sidebar-title" data-i18n="your_chats">YOUR CHATS</span>',
         '    <button id="sidebar-close" class="icon-x" type="button">&#10005;</button>',
         '  </div>',
-        '  <button id="new-chat-btn" type="button">&#65291; New chat</button>',
+        '  <button id="new-chat-btn" type="button">&#65291; <span data-i18n="new_chat">New chat</span></button>',
         '  <div id="chat-list"></div>',
         '  <div class="sidebar-footer">',
-        '    <button id="settings-btn" type="button"><span class="gear">&#9881;&#xFE0E;</span><span>Settings</span></button>',
+        '    <button id="settings-btn" type="button"><span class="gear">&#9881;&#xFE0E;</span><span data-i18n="settings">Settings</span></button>',
         '  </div>',
         '</aside>',
         '<div id="settings-backdrop"></div>',
         '<aside id="settings-panel">',
         '  <div class="settings-header">',
-        '    <span class="settings-title">Settings</span>',
+        '    <span class="settings-title" data-i18n="settings">Settings</span>',
         '    <button id="settings-close" class="icon-x" type="button">&#10005;</button>',
         '  </div>',
         '  <div class="tabs">',
-        '    <button class="tab active" data-tab="language" type="button">Language</button>',
-        '    <button class="tab" data-tab="models" type="button">Models</button>',
-        '    <button class="tab" data-tab="session" type="button">Session</button>',
-        '    <button class="tab" data-tab="about" type="button">About</button>',
+        '    <button class="tab active" data-tab="language" type="button" data-i18n="language">Language</button>',
+        '    <button class="tab" data-tab="models" type="button" data-i18n="models">Models</button>',
+        '    <button class="tab" data-tab="session" type="button" data-i18n="session">Session</button>',
+        '    <button class="tab" data-tab="about" type="button" data-i18n="about">About</button>',
         '  </div>',
         '  <div class="tab-content active" data-tab-content="language">',
         '    <div class="setting-section">',
-        '      <div class="setting-label">Language</div>',
+        '      <div class="setting-label" data-i18n="language">Language</div>',
         '      <div id="lang-list"></div>',
         '    </div>',
         '  </div>',
         '  <div class="tab-content" data-tab-content="models">',
         '    <div class="setting-section">',
-        '      <div class="setting-label">Providers</div>',
+        '      <div class="setting-label" data-i18n="providers">Providers</div>',
         '      <div id="model-list"></div>',
         '    </div>',
         '    <div class="setting-section" id="groq-models-section">',
-        '      <div class="setting-label">Groq models</div>',
+        '      <div class="setting-label" data-i18n="groq_models">Groq models</div>',
         '      <div id="groq-model-list"></div>',
         '    </div>',
         '  </div>',
         '  <div class="tab-content" data-tab-content="session">',
         '    <div class="setting-section">',
-        '      <div class="setting-label">Your code</div>',
+        '      <div class="setting-label" data-i18n="your_code">Your code</div>',
         '      <div class="code-display" id="current-code">' + H.escape(code or "--------") + '</div>',
-        '      <div id="code-copied" style="display:none;color:#4f8dff;font-size:0.82rem;text-align:center;margin-bottom:12px;">Copied to clipboard!</div>',
-        '      <div class="about-text">Click the code to copy. Enter it on another device to open your chats there.</div>',
+        '      <div id="code-copied" style="display:none;color:#4f8dff;font-size:0.82rem;text-align:center;margin-bottom:12px;" data-i18n="copied">Copied to clipboard!</div>',
+        '      <div class="about-text" data-i18n="copy_hint">Click the code to copy. Enter it on another device to open your chats there.</div>',
         '    </div>',
         '    <div class="setting-section">',
-        '      <button class="setting-btn danger" id="logout-btn" type="button">Sign out</button>',
+        '      <button class="setting-btn danger" id="logout-btn" type="button" data-i18n="sign_out">Sign out</button>',
         '    </div>',
         '  </div>',
         '  <div class="tab-content" data-tab-content="about">',
         '    <div class="setting-section">',
-        '      <div class="setting-label">About</div>',
-        '      <div class="about-text">Strafe is a project made for your use. Chats are stored on the server and tied to your code, so keep your code private.</div>',
+        '      <div class="setting-label" data-i18n="about">About</div>',
+        '      <div class="about-text" data-i18n="about_text">Strafe is a project made for your use. Chats are stored on the server and tied to your code, so keep your code private.</div>',
         '    </div>',
         '    <div class="setting-section">',
-        '      <div class="setting-label">Danger Zone</div>',
-        '      <button class="setting-btn danger" id="delete-all-btn" type="button">Delete all chats</button>',
+        '      <div class="setting-label" data-i18n="danger">Danger Zone</div>',
+        '      <button class="setting-btn danger" id="delete-all-btn" type="button" data-i18n="delete_all">Delete all chats</button>',
         '    </div>',
         '  </div>',
         '</aside>',
@@ -788,8 +870,16 @@ def build_ui_html(data_json, code):
         '  <div class="modal-content">',
         '    <h2 class="modal-title" id="confirm-title">Confirm</h2>',
         '    <p class="modal-text" id="confirm-text">Are you sure?</p>',
-        '    <button id="confirm-yes" class="modal-btn danger" type="button">Yes</button>',
-        '    <button id="confirm-no" class="modal-btn secondary" type="button">Cancel</button>',
+        '    <button id="confirm-yes" class="modal-btn danger" type="button" data-i18n="yes">Yes</button>',
+        '    <button id="confirm-no" class="modal-btn secondary" type="button" data-i18n="cancel">Cancel</button>',
+        '  </div>',
+        '</div>',
+        '<div id="rename-modal" class="modal">',
+        '  <div class="modal-content">',
+        '    <h2 class="modal-title" data-i18n="rename_chat">Rename chat</h2>',
+        '    <input id="rename-input" class="modal-input" type="text" maxlength="60" autocomplete="off"/>',
+        '    <button id="rename-save" class="modal-btn primary" type="button" data-i18n="save">Save</button>',
+        '    <button id="rename-cancel" class="modal-btn secondary" type="button" data-i18n="cancel">Cancel</button>',
         '  </div>',
         '</div>',
         '<script id="strafe-data" type="application/json">' + data_json + '</script>',
@@ -806,6 +896,13 @@ def _chat_store():
         st.session_state[cache_key] = db_get_chats(ch)
     return st.session_state[cache_key]
 
+def _chat_title(c):
+    if c.get("custom_title"):
+        return c["custom_title"]
+    msgs = c.get("messages") or []
+    first_user = next((m for m in msgs if m.get("role") == "user"), None)
+    return ((first_user or {}).get("content") or "").strip().replace("\n", " ")[:48] or "New chat"
+
 def _create_new_chat_id():
     return "chat_" + uuid.uuid4().hex[:12]
 
@@ -818,7 +915,7 @@ def _create_current_chat():
         db_delete_chat(ch, cid)
     cid = _create_new_chat_id()
     msgs = []
-    chat = {"id": cid, "title": "New chat", "messages": msgs, "created": time.time(), "updated": time.time()}
+    chat = {"id": cid, "title": "New chat", "messages": msgs, "created": time.time(), "updated": time.time(), "custom_title": None}
     store[cid] = chat
     st.session_state.current_chat_id = cid
     st.session_state.messages = msgs
@@ -832,22 +929,20 @@ def _persist_current_chat():
     if not cid:
         return
     ch = _code_hash()
-    first_user = next((m for m in msgs if m.get("role") == "user"), None)
-    title = ((first_user or {}).get("content") or "").strip().replace("\n", " ")[:48] or "New chat"
-    chat = {"id": cid, "title": title, "messages": msgs, "created": st.session_state.get("chat_created", time.time()), "updated": time.time()}
+    store = _chat_store()
+    existing = store.get(cid, {})
+    chat = {"id": cid, "title": "New chat", "messages": msgs, "created": st.session_state.get("chat_created", time.time()), "updated": time.time(), "custom_title": existing.get("custom_title")}
+    chat["title"] = _chat_title(chat)
     db_save_chat(ch, chat)
-    _chat_store()[cid] = chat
+    store[cid] = chat
 
 def _get_chat_summaries():
     store = _chat_store()
     summaries = []
     for cid, c in store.items():
-        msgs = c.get("messages") or []
-        if not msgs:
+        if not (c.get("messages") or []):
             continue
-        first_user = next((m for m in msgs if m.get("role") == "user"), None)
-        title = ((first_user or {}).get("content") or "").strip().replace("\n", " ")[:48] or "New chat"
-        summaries.append({"id": cid, "title": title, "_updated": c.get("updated", c.get("created", 0))})
+        summaries.append({"id": cid, "title": _chat_title(c), "_updated": c.get("updated", c.get("created", 0))})
     summaries.sort(key=lambda x: x["_updated"], reverse=True)
     for s in summaries:
         del s["_updated"]
@@ -898,6 +993,14 @@ def handle_action(action):
             st.session_state.current_chat_id = cid
             st.session_state.messages = store[cid]["messages"]
             st.session_state.chat_created = store[cid].get("created", time.time())
+    elif t == "rename_chat":
+        cid = get_action_field(action, "chat_id")
+        title = (get_action_field(action, "title", "") or "").strip()[:60]
+        store = _chat_store()
+        if cid and title and cid in store:
+            store[cid]["custom_title"] = title
+            store[cid]["title"] = title
+            db_rename_chat(ch, cid, title)
     elif t == "delete_chat":
         cid = get_action_field(action, "chat_id")
         store = _chat_store()
@@ -923,7 +1026,7 @@ def handle_action(action):
         init_ui_state()
     elif t == "set_language":
         lang = get_action_field(action, "lang")
-        if lang:
+        if lang in LANG_NAMES:
             st.session_state.language = lang
             db_set_settings(ch, language=lang)
     elif t == "set_model":
@@ -977,6 +1080,22 @@ def get_prompt():
         return submitted
     return None
 
+def copy_button(text, key):
+    lang = st.session_state.get("language", "en")
+    label = T_PY.get(lang, T_PY["en"])["copy"]
+    done = T_PY.get(lang, T_PY["en"])["copied"]
+    payload = json.dumps({"t": text}, ensure_ascii=False).replace("</", "<\\/")
+    h = hashlib.md5((payload + label + done).encode()).hexdigest()[:10]
+    name = "strafe_copy_" + h
+    html = '<button id="cp" class="cp-btn" type="button" data-label="' + H.escape(label) + '" data-done="' + H.escape(done) + '">' + H.escape(label) + '</button><script id="strafe-copy-data" type="application/json">' + payload + '</script>'
+    if "copy_factories" not in st.session_state:
+        st.session_state.copy_factories = {}
+    if name not in st.session_state.copy_factories:
+        st.session_state.copy_factories[name] = components.component(name, html=html, css=COPY_CSS, js=COPY_JS)
+        while len(st.session_state.copy_factories) > 60:
+            del st.session_state.copy_factories[next(iter(st.session_state.copy_factories))]
+    st.session_state.copy_factories[name](key="cpk_" + h + "_" + key)
+
 CSS = """
 <link href='https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap' rel='stylesheet'>
 <style>
@@ -1006,11 +1125,13 @@ div[data-testid='stPopover'] button:hover{color:#fff !important;}
 div[data-testid='stPopover'] button p{margin:0 !important;}
 .info-line{color:#8a8a8a !important;font-size:0.82rem !important;line-height:1.5 !important;font-family:'Space Grotesk',sans-serif !important;padding:2px 0 6px 0;}
 .info-line span{color:#bdbdbd;}
-.close-row button{background:transparent !important;border:none !important;color:#7a7a7a !important;font-size:0.85rem !important;padding:2px 8px !important;box-shadow:none !important;}
-.close-row button:hover{color:#fff !important;}
-div[data-testid='stExpander'] details{background:#1a1a1a !important;border:1px solid #2a2a2a !important;border-radius:12px !important;padding:8px 12px !important;margin:8px 0 !important;}
-div[data-testid='stExpander'] summary{color:#8a8a8a !important;font-size:0.85rem !important;cursor:pointer !important;}
-div[data-testid='stExpander'] .stMarkdown{color:#bdbdbd !important;font-size:0.9rem !important;}
+div[class*='st-key-ed']{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:22px;padding:12px;margin:10px 0 0 0;box-shadow:0 8px 30px rgba(0,0,0,0.5);}
+div[class*='st-key-ed'] textarea{background:#0f0f0f !important;border:1px solid #333 !important;border-radius:16px !important;color:#fff !important;font-size:1rem !important;line-height:1.5 !important;padding:12px 16px !important;font-family:'Space Grotesk',sans-serif !important;box-shadow:none !important;}
+div[class*='st-key-ed'] textarea:focus{border-color:#4f8dff !important;outline:none !important;box-shadow:0 0 0 3px rgba(79,141,255,0.15) !important;}
+div[class*='st-key-sv'] button{background:#4f8dff !important;color:#fff !important;border:none !important;border-radius:18px !important;height:36px !important;min-height:36px !important;padding:0 18px !important;font-family:'Space Grotesk',sans-serif !important;font-size:0.9rem !important;}
+div[class*='st-key-sv'] button:hover{background:#2563eb !important;}
+div[class*='st-key-cx'] button{background:#1a1a1a !important;color:#bdbdbd !important;border:1px solid #2a2a2a !important;border-radius:18px !important;height:36px !important;min-height:36px !important;padding:0 18px !important;font-family:'Space Grotesk',sans-serif !important;font-size:0.9rem !important;}
+div[class*='st-key-cx'] button:hover{color:#fff !important;border-color:#4f8dff !important;}
 .login-page{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:85vh;padding:20px;}
 .login-brand{font-size:3rem;font-weight:700;letter-spacing:8px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:8px;}
 .login-sub{color:#6b7280;font-size:0.9rem;margin-bottom:40px;letter-spacing:1px;}
@@ -1198,7 +1319,8 @@ def msg_to_api(m, distance_from_latest=None):
 
 def build_payload(history):
     model = pick_model()
-    system_text = SYSTEM + "\nToday is " + datetime.now().strftime("%Y-%m-%d") + "."
+    lang = LANG_NAMES.get(st.session_state.get("language", "en"), "English")
+    system_text = SYSTEM + "\nToday is " + datetime.now().strftime("%Y-%m-%d") + ". Always reply in " + lang + " unless the user asks for another language."
     msgs = [{"role": "system", "content": system_text}] + history
     if st.session_state.get("model_choice") == "celeris":
         return dict(model=model, messages=msgs, max_tokens=1024, temperature=0.7)
@@ -1341,10 +1463,10 @@ editing = st.session_state.get("editing")
 for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
         if editing == i:
-            new = st.text_area("Edit", value=m["content"], key="ed" + str(i), height=100)
-            sc, sk = st.columns([1, 6])
+            new = st.text_area("Edit", value=m["content"], key="ed" + str(i), height=110, label_visibility="collapsed")
+            sc, sk = st.columns([1, 1])
             with sc:
-                if st.button("Save", key="sv" + str(i)):
+                if st.button(tp("edit") if False else "Save", key="sv" + str(i)):
                     st.session_state.messages[:] = st.session_state.messages[:i]
                     st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False), "images": m.get("images", []), "files": m.get("files", [])}
                     st.session_state["editing"] = None
@@ -1362,7 +1484,8 @@ for i, m in enumerate(st.session_state.messages):
             with _mn:
                 with st.popover(MENU_GLYPH, key="mu" + str(i)):
                     st.html(info_html(m))
-                    if st.button("Edit", key="ue" + str(i)):
+                    copy_button(m["content"], "u" + str(i))
+                    if st.button(tp("edit"), key="ue" + str(i)):
                         st.session_state["act"] = ("edit", i)
                         st.rerun()
     else:
@@ -1377,7 +1500,8 @@ for i, m in enumerate(st.session_state.messages):
         with _mn:
             with st.popover(MENU_GLYPH, key="ma" + str(i)):
                 st.html(info_html(m))
-                if st.button("Retry", key="ar" + str(i)):
+                copy_button(m["content"], "a" + str(i))
+                if st.button(tp("retry"), key="ar" + str(i)):
                     st.session_state["act"] = ("retry", i)
                     st.rerun()
 
