@@ -28,16 +28,16 @@ COOLDOWN = 5
 HISTORY_LIMIT = 15
 
 GROQ_CHOICES = ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b")
-GROQ_DEFAULT = "openai/gpt-oss-120b"
+GROQ_DEFAULT = "qwen/qwen3.8-27b"
 PREFERRED = list(GROQ_CHOICES)
 SAFE_MODELS = set(GROQ_CHOICES) | {"llama-3.3-70b-versatile"}
 NO_VISION_MODELS = {"openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 LANG_NAMES = {"en": "English", "ru": "Russian", "uk": "Ukrainian"}
 
 T_PY = {
-    "en": {"edit": "Edit", "retry": "Retry", "copy": "Copy", "copied": "Copied", "think": "Think", "search": "Search", "photo": "Photo", "camera": "Camera", "file": "File", "ask": "Ask something"},
-    "ru": {"edit": "Изменить", "retry": "Повторить", "copy": "Копировать", "copied": "Скопировано", "think": "Думать", "search": "Поиск", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Спросите что-нибудь"},
-    "uk": {"edit": "Редагувати", "retry": "Повторити", "copy": "Копіювати", "copied": "Скопійовано", "think": "Думати", "search": "Пошук", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Запитайте що-небудь"},
+    "en": {"edit": "Edit", "retry": "Retry", "copy": "Copy", "copied": "Copied", "think": "Think", "search": "Search", "photo": "Photo", "camera": "Camera", "file": "File", "ask": "Ask something", "no_search": "Gemma 4 doesn't support search. Disabled for this message.", "no_vision": "This model doesn't have vision. Switch to a vision model in Settings > Models.", "image_dropped": "This model doesn't support images. Photo not sent."},
+    "ru": {"edit": "Изменить", "retry": "Повторить", "copy": "Копировать", "copied": "Скопировано", "think": "Думать", "search": "Поиск", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Спросите что-нибудь", "no_search": "Gemma 4 не поддерживает поиск. Отключено для этого сообщения.", "no_vision": "Эта модель не поддерживает изображения. Выберите модель с распознаванием картинок в Настройки > Модели.", "image_dropped": "Эта модель не поддерживает изображения. Фото не отправлено."},
+    "uk": {"edit": "Редагувати", "retry": "Повторити", "copy": "Копіювати", "copied": "Скопійовано", "think": "Думати", "search": "Пошук", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Запитайте що-небудь", "no_search": "Gemma 4 не підтримує пошук. Вимкнено для цього повідомлення.", "no_vision": "Ця модель не підтримує зображення. Оберіть модель із підтримкою зору в Налаштування > Моделі.", "image_dropped": "Ця модель не підтримує зображення. Фото не надіслано."},
 }
 
 def tp(key):
@@ -74,12 +74,12 @@ def db_init():
     stmts = [
         "CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, title TEXT NOT NULL, messages TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, custom_title TEXT)",
         "CREATE INDEX IF NOT EXISTS idx_chats_code ON chats(code_hash, updated DESC)",
-        "CREATE TABLE IF NOT EXISTS settings (code_hash TEXT PRIMARY KEY, language TEXT NOT NULL DEFAULT 'en', model TEXT NOT NULL DEFAULT 'groq', groq_model TEXT NOT NULL DEFAULT 'openai/gpt-oss-120b')",
+        "CREATE TABLE IF NOT EXISTS settings (code_hash TEXT PRIMARY KEY, language TEXT NOT NULL DEFAULT 'en', model TEXT NOT NULL DEFAULT 'groq', groq_model TEXT NOT NULL DEFAULT 'qwen/qwen3.8-27b')",
         "CREATE TABLE IF NOT EXISTS codes (code_hash TEXT PRIMARY KEY, created REAL NOT NULL)",
         "CREATE TABLE IF NOT EXISTS ip_bans (ip TEXT PRIMARY KEY, ban_until REAL NOT NULL)",
         "CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL, attempted_at REAL NOT NULL, success INTEGER NOT NULL DEFAULT 0)",
         "CREATE INDEX IF NOT EXISTS idx_attempts_ip ON login_attempts(ip, attempted_at)",
-        "ALTER TABLE settings ADD COLUMN groq_model TEXT NOT NULL DEFAULT 'openai/gpt-oss-120b'",
+        "ALTER TABLE settings ADD COLUMN groq_model TEXT NOT NULL DEFAULT 'qwen/qwen3.8-27b'",
         "ALTER TABLE chats ADD COLUMN custom_title TEXT",
     ]
     for s in stmts:
@@ -646,8 +646,8 @@ export default function(component){
     const DATA=JSON.parse(dataEl.textContent);
     const I18N={
         en:{your_chats:'YOUR CHATS',new_chat:'New chat',no_chats:'No chats yet',settings:'Settings',language:'Language',models:'Models',session:'Session',about:'About',providers:'Providers',groq_models:'Groq models',your_code:'Your code',copy_hint:'Click the code to copy. Enter it on another device to open your chats there.',copied:'Copied to clipboard!',sign_out:'Sign out',about_text:'Strafe is a project made for your use. Chats are stored on the server and tied to your code, so keep your code private.',danger:'Danger Zone',delete_all:'Delete all chats',yes:'Yes',cancel:'Cancel',save:'Save',rename_chat:'Rename chat',delete_chat_q:'Delete chat?',delete_chat_t:'Are you sure you want to delete this chat? This cannot be undone.',delete_all_q:'Delete all chats?',delete_all_t:'Are you sure you want to delete ALL chats? This cannot be undone.',sign_out_q:'Sign out?',sign_out_t:'You will return to the login page. Your chats are saved.',auto_on:'Auto on',lang_en:'English',lang_ru:'Russian',lang_uk:'Ukrainian',model_desc_prov_groq:'Groq has strong coding/math skills. Also known for fast responses.',model_desc_prov_celeris:'Gemma 4 is quick and good at everyday chat, writing and simple code.',model_desc_120b:'Best for long answers, writing and code.',model_desc_20b:'Smaller GPT-OSS model, idk what to say more becauseits just the weaker verision.',model_desc_qwen:'Has strong rule following, good at vision, also has least limits.'},
-        ru:{your_chats:'ВАШИ ЧАТЫ',new_chat:'Новый чат',no_chats:'Чатов пока нет',settings:'Настройки',language:'Язык',models:'Модели',session:'Сессия',about:'О приложении',providers:'Провайдеры',groq_models:'Модели Groq',your_code:'Ваш код',copy_hint:'Нажмите на код, чтобы скопировать. Введите его на другом устройстве, чтобы открыть свои чаты.',copied:'Скопировано в буфер обмена!',sign_out:'Выйти',about_text:'Strafe — проект для вашего личного использования. Чаты хранятся на сервере и привязаны к вашему коду, поэтому держите код в секрете.',danger:'Опасная зона',delete_all:'Удалить все чаты',yes:'Да',cancel:'Отмена',save:'Сохранить',rename_chat:'Переименовать чат',delete_chat_q:'Удалить чат?',delete_chat_t:'Вы уверены, что хотите удалить этот чат? Это нельзя отменить.',delete_all_q:'Удалить все чаты?',delete_all_t:'Вы уверены, что хотите удалить ВСЕ чаты? Это нельзя отменить.',sign_out_q:'Выйти?',sign_out_t:'Вы вернётесь на страницу входа. Ваши чаты сохранены.',auto_on:'Авто',lang_en:'English',lang_ru:'Русский',lang_uk:'Українська'},
-        uk:{your_chats:'ВАШІ ЧАТИ',new_chat:'Новий чат',no_chats:'Чатів поки немає',settings:'Налаштування',language:'Мова',models:'Моделі',session:'Сесія',about:'Про застосунок',providers:'Провайдери',groq_models:'Моделі Groq',your_code:'Ваш код',copy_hint:'Натисніть на код, щоб скопіювати. Введіть його на іншому пристрої, щоб відкрити свої чати.',copied:'Скопійовано в буфер обміну!',sign_out:'Вийти',about_text:'Strafe — проєкт для вашого особистого використання. Чати зберігаються на сервері й прив’язані до вашого коду, тож тримайте код у таємниці.',danger:'Небезпечна зона',delete_all:'Видалити всі чати',yes:'Так',cancel:'Скасувати',save:'Зберегти',rename_chat:'Перейменувати чат',delete_chat_q:'Видалити чат?',delete_chat_t:'Ви впевнені, що хочете видалити цей чат? Це не можна скасувати.',delete_all_q:'Видалити всі чати?',delete_all_t:'Ви впевнені, що хочете видалити ВСІ чати? Це не можна скасувати.',sign_out_q:'Вийти?',sign_out_t:'Ви повернетеся на сторінку входу. Ваші чати збережено.',auto_on:'Авто',lang_en:'English',lang_ru:'Русский',lang_uk:'Українська'}
+        ru:{your_chats:'ВАШИ ЧАТЫ',new_chat:'Новый чат',no_chats:'Чатов пока нет',settings:'Настройки',language:'Язык',models:'Модели',session:'Сессия',about:'О приложении',providers:'Провайдеры',groq_models:'Модели Groq',your_code:'Ваш код',copy_hint:'Нажмите на код, чтобы скопировать. Введите его на другом устройстве, чтобы открыть свои чаты.',copied:'Скопировано в буфер обмена!',sign_out:'Выйти',about_text:'Strafe — проект для вашего личного использования. Чаты хранятся на сервере и привязаны к вашему коду, поэтому держите код в секрете.',danger:'Опасная зона',delete_all:'Удалить все чаты',yes:'Да',cancel:'Отмена',save:'Сохранить',rename_chat:'Переименовать чат',delete_chat_q:'Удалить чат?',delete_chat_t:'Вы уверены, что хотите удалить этот чат? Это нельзя отменить.',delete_all_q:'Удалить все чаты?',delete_all_t:'Вы уверены, что хотите удалить ВСЕ чаты? Это нельзя отменить.',sign_out_q:'Выйти?',sign_out_t:'Вы вернётесь на страницу входа. Ваши чаты сохранены.',auto_on:'Авто',lang_en:'English',lang_ru:'Русский',lang_uk:'Українська',model_desc_prov_groq:'Groq — сильные навыки в коде и математике. Известен быстрыми ответами.',model_desc_prov_celeris:'Gemma 4 быстрая и хорошо справляется с обычным общением, текстами и простым кодом.',model_desc_120b:'Лучшая для длинных ответов, текстов и кода.',model_desc_20b:'Меньшая версия GPT-OSS, просто слабее старшей.',model_desc_qwen:'Строго следует правилам, хорошо понимает картинки и имеет меньше всего ограничений.'},
+        uk:{your_chats:'ВАШІ ЧАТИ',new_chat:'Новий чат',no_chats:'Чатів поки немає',settings:'Налаштування',language:'Мова',models:'Моделі',session:'Сесія',about:'Про застосунок',providers:'Провайдери',groq_models:'Моделі Groq',your_code:'Ваш код',copy_hint:'Натисніть на код, щоб скопіювати. Введіть його на іншому пристрої, щоб відкрити свої чати.',copied:'Скопійовано в буфер обміну!',sign_out:'Вийти',about_text:'Strafe — проєкт для вашого особистого використання. Чати зберігаються на сервері й прив’язані до вашого коду, тож тримайте код у таємниці.',danger:'Небезпечна зона',delete_all:'Видалити всі чати',yes:'Так',cancel:'Скасувати',save:'Зберегти',rename_chat:'Перейменувати чат',delete_chat_q:'Видалити чат?',delete_chat_t:'Ви впевнені, що хочете видалити цей чат? Це не можна скасувати.',delete_all_q:'Видалити всі чати?',delete_all_t:'Ви впевнені, що хочете видалити ВСІ чати? Це не можна скасувати.',sign_out_q:'Вийти?',sign_out_t:'Ви повернетеся на сторінку входу. Ваші чати збережено.',auto_on:'Авто',lang_en:'English',lang_ru:'Русский',lang_uk:'Українська',model_desc_prov_groq:'Groq має сильні навички в коді та математиці. Відомий швидкими відповідями.',model_desc_prov_celeris:'Gemma 4 швидка і добре справляється зі звичайною розмовою, текстами та простим кодом.',model_desc_120b:'Найкраща для довгих відповідей, текстів і коду.',model_desc_20b:'Менша версія GPT-OSS, просто слабша за старшу.',model_desc_qwen:'Добре дотримується правил, розуміє зображення і має найменше обмежень.'}
     };
     const LANG=I18N[DATA.language]?DATA.language:'en';
     function t(k){return (I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;}
@@ -1405,7 +1405,7 @@ def ask(use_search=False, use_think=False, look_back=False):
     if use_celeris and not celeris_ready():
         raise RuntimeError("Celeris not configured.")
     if use_celeris and use_search:
-        st.toast("Gemma 4 doesn't support search. Disabled for this message.")
+        st.toast(tp("no_search"))
         use_search = False
     t0 = time.time()
     slice_msgs = st.session_state.messages if look_back else st.session_state.messages[-HISTORY_LIMIT:]
@@ -1498,7 +1498,7 @@ if pending is not None:
     files = pending.get("files", []) if isinstance(pending, dict) else []
     if images and not has_vision():
         images = []
-        st.toast("This model doesn't support images. Dropped the photo.")
+        st.toast(tp("image_dropped"))
     is_look_back = text.strip().lower() == "look_back"
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "images": images, "files": files})
     try:
@@ -1571,6 +1571,6 @@ if ma:
     elif ma == "file_too_large":
         st.toast("File too large. Max 500KB for text files.")
     elif ma == "no_vision":
-        st.toast("This model doesn't have vision. Switch to a vision model in Settings > Models.")
+        st.toast(tp("no_vision"))
     else:
         st.toast(str(ma) + " selected")
