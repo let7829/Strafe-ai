@@ -27,21 +27,27 @@ BAN_DURATION = 900
 COOLDOWN = 5
 HISTORY_LIMIT = 15
 
-GROQ_CHOICES = ("qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b")
-GROQ_DEFAULT = GROQ_CHOICES[0]
+GROQ_CHOICES = ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b")
+GROQ_DEFAULT = "openai/gpt-oss-120b"
 PREFERRED = list(GROQ_CHOICES)
 SAFE_MODELS = set(GROQ_CHOICES) | {"llama-3.3-70b-versatile"}
+NO_VISION_MODELS = {"openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 LANG_NAMES = {"en": "English", "ru": "Russian", "uk": "Ukrainian"}
 
 T_PY = {
-    "en": {"edit": "Edit", "retry": "Retry", "copy": "Copy", "copied": "Copied"},
-    "ru": {"edit": "Изменить", "retry": "Повторить", "copy": "Копировать", "copied": "Скопировано"},
-    "uk": {"edit": "Редагувати", "retry": "Повторити", "copy": "Копіювати", "copied": "Скопійовано"},
+    "en": {"edit": "Edit", "retry": "Retry", "copy": "Copy", "copied": "Copied", "think": "Think", "search": "Search", "photo": "Photo", "camera": "Camera", "file": "File", "ask": "Ask something"},
+    "ru": {"edit": "Изменить", "retry": "Повторить", "copy": "Копировать", "copied": "Скопировано", "think": "Думать", "search": "Поиск", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Спросите что-нибудь"},
+    "uk": {"edit": "Редагувати", "retry": "Повторити", "copy": "Копіювати", "copied": "Скопійовано", "think": "Думати", "search": "Пошук", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Запитайте що-небудь"},
 }
 
 def tp(key):
     lang = st.session_state.get("language", "en")
     return T_PY.get(lang, T_PY["en"])[key]
+
+def has_vision():
+    if st.session_state.get("model_choice") == "celeris":
+        return True
+    return st.session_state.get("groq_model", GROQ_DEFAULT) not in NO_VISION_MODELS
 
 def _log(where, e):
     print("[strafe] " + where + ": " + str(e), flush=True)
@@ -68,12 +74,12 @@ def db_init():
     stmts = [
         "CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, title TEXT NOT NULL, messages TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, custom_title TEXT)",
         "CREATE INDEX IF NOT EXISTS idx_chats_code ON chats(code_hash, updated DESC)",
-        "CREATE TABLE IF NOT EXISTS settings (code_hash TEXT PRIMARY KEY, language TEXT NOT NULL DEFAULT 'en', model TEXT NOT NULL DEFAULT 'groq', groq_model TEXT NOT NULL DEFAULT 'qwen/qwen3.8-27b')",
+        "CREATE TABLE IF NOT EXISTS settings (code_hash TEXT PRIMARY KEY, language TEXT NOT NULL DEFAULT 'en', model TEXT NOT NULL DEFAULT 'groq', groq_model TEXT NOT NULL DEFAULT 'openai/gpt-oss-120b')",
         "CREATE TABLE IF NOT EXISTS codes (code_hash TEXT PRIMARY KEY, created REAL NOT NULL)",
         "CREATE TABLE IF NOT EXISTS ip_bans (ip TEXT PRIMARY KEY, ban_until REAL NOT NULL)",
         "CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL, attempted_at REAL NOT NULL, success INTEGER NOT NULL DEFAULT 0)",
         "CREATE INDEX IF NOT EXISTS idx_attempts_ip ON login_attempts(ip, attempted_at)",
-        "ALTER TABLE settings ADD COLUMN groq_model TEXT NOT NULL DEFAULT 'qwen/qwen3.8-27b'",
+        "ALTER TABLE settings ADD COLUMN groq_model TEXT NOT NULL DEFAULT 'openai/gpt-oss-120b'",
         "ALTER TABLE chats ADD COLUMN custom_title TEXT",
     ]
     for s in stmts:
@@ -290,43 +296,6 @@ def db_set_settings(code_hash, language=None, model=None, groq_model=None):
     except Exception as e:
         _log("db_set_settings", e)
 
-INPUT_HTML = '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="Ask something" autocomplete="off"/><button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div><div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">Search</span></button><button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">Think</span></button></div><div id="menu"><button id="mb-photo" type="button" class="menu-btn">Photo</button><button id="mb-camera" type="button" class="menu-btn">Camera</button><button id="mb-file" type="button" class="menu-btn">\u2399 File</button></div></div><div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
-
-INPUT_CSS = """
-#bar{position:fixed;bottom:8px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
-#atts{display:flex;gap:8px;width:100%;max-width:760px;flex-wrap:wrap;padding-left:4px;box-sizing:border-box;}
-#atts:empty{display:none;}
-.att{position:relative;width:56px;height:56px;border-radius:12px;overflow:hidden;border:1px solid #2a2a2a;flex-shrink:0;}
-.att img{width:100%;height:100%;object-fit:cover;display:block;}
-.att-x{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(0,0,0,0.75);color:#fff;font-size:0.65rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
-.att-file{position:relative;display:flex;align-items:center;gap:6px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:8px 12px;font-size:0.8rem;color:#bdbdbd;font-family:'Space Grotesk',sans-serif;max-width:200px;}
-.att-file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
-.att-file-x{width:18px;height:18px;border-radius:50%;border:none;background:rgba(255,255,255,0.1);color:#fff;font-size:0.6rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;}
-#tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
-.tool-btn{height:32px;border-radius:16px;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:0.85rem;cursor:pointer;display:flex;align-items:center;gap:6px;padding:0 12px;transition:all 0.2s;font-family:'Space Grotesk',sans-serif;}
-.tool-btn .icon{font-size:1rem;line-height:1;}
-.tool-btn .label{white-space:nowrap;}
-.tool-btn:hover{color:#fff;border-color:#4f8dff;}
-.tool-btn.active{background:#4f8dff;color:#fff;border-color:#4f8dff;}
-#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:8px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
-#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}
-#ci::placeholder{color:#6b7280;}
-.icon-btn{width:32px;height:32px;border-radius:50%;border:none;background:transparent;color:#7a7a7a;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:color 0.2s;}
-.icon-btn:hover{color:#fff;}
-#sb{width:38px;height:38px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-#sb:hover{background:#2563eb;}
-#menu{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;overflow:hidden;max-height:0;opacity:0;transition:max-height 0.25s ease,opacity 0.2s ease;}
-#menu.open{max-height:60px;opacity:1;}
-.menu-btn{height:40px;border-radius:14px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;padding:0 18px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;white-space:nowrap;}
-.menu-btn:hover{border-color:#4f8dff;color:#fff;}
-#cam-overlay{display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:#000;z-index:10000000;flex-direction:column;align-items:center;justify-content:flex-end;}
-#cam-overlay.active{display:flex;}
-#cam-video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
-#cam-close{position:absolute;top:16px;right:16px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);color:#fff;font-size:1.4rem;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:10000001;}
-#cam-capture{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:#fff;margin-bottom:40px;z-index:10000001;cursor:pointer;flex-shrink:0;}
-#cam-capture:active{transform:scale(0.9);}
-"""
-
 INPUT_JS = """
 export default function(component){
     const{parentElement,setTriggerValue}=component;
@@ -345,6 +314,8 @@ export default function(component){
     const camClose=parentElement.querySelector('#cam-close');
     const camCapture=parentElement.querySelector('#cam-capture');
     const camCanvas=parentElement.querySelector('#cam-canvas');
+    const visEl=parentElement.querySelector('#vis');
+    const canVision=!!visEl&&visEl.dataset.v==='1';
     if(!input||!btn)return;
     let searchActive=true;
     let thinkActive=false;
@@ -444,8 +415,19 @@ export default function(component){
     btn.onclick=send;
     input.onkeydown=function(e){if(e.key==='Enter')send();};
     if(plusBtn&&menu){plusBtn.onclick=function(){menu.classList.toggle('open');};}
-    if(photoBtn){photoBtn.onclick=function(){menu.classList.remove('open');imageInput.click();};}
-    if(cameraBtn){cameraBtn.onclick=openCamera;}
+    if(!canVision){
+        if(photoBtn)photoBtn.classList.add('dis');
+        if(cameraBtn)cameraBtn.classList.add('dis');
+    }
+    if(photoBtn){photoBtn.onclick=function(){
+        menu.classList.remove('open');
+        if(!canVision){setTriggerValue('menu_action','no_vision');return;}
+        imageInput.click();
+    };}
+    if(cameraBtn){cameraBtn.onclick=function(){
+        if(!canVision){menu.classList.remove('open');setTriggerValue('menu_action','no_vision');return;}
+        openCamera();
+    };}
     if(fileBtn){fileBtn.onclick=function(){menu.classList.remove('open');fileInput.click();};}
     if(camClose){camClose.onclick=stopCamera;}
     if(camCapture){camCapture.onclick=capturePhoto;}
@@ -474,7 +456,80 @@ export default function(component){
 }
 """
 
-chat_input = components.component("strafe_chat_input", html=INPUT_HTML, css=INPUT_CSS, js=INPUT_JS)
+INPUT_CSS = """
+#bar{position:fixed;bottom:8px;left:0;right:0;padding:0 14px;background:transparent;z-index:999999;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:8px;}
+#atts{display:flex;gap:8px;width:100%;max-width:760px;flex-wrap:wrap;padding-left:4px;box-sizing:border-box;}
+#atts:empty{display:none;}
+.att{position:relative;width:56px;height:56px;border-radius:12px;overflow:hidden;border:1px solid #2a2a2a;flex-shrink:0;}
+.att img{width:100%;height:100%;object-fit:cover;display:block;}
+.att-x{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;border:none;background:rgba(0,0,0,0.75);color:#fff;font-size:0.65rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
+.att-file{position:relative;display:flex;align-items:center;gap:6px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:8px 12px;font-size:0.8rem;color:#bdbdbd;font-family:'Space Grotesk',sans-serif;max-width:200px;}
+.att-file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+.att-file-x{width:18px;height:18px;border-radius:50%;border:none;background:rgba(255,255,255,0.1);color:#fff;font-size:0.6rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;}
+#tools{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;}
+.tool-btn{height:32px;border-radius:16px;border:1px solid #2a2a2a;background:#1a1a1a;color:#7a7a7a;font-size:0.85rem;cursor:pointer;display:flex;align-items:center;gap:6px;padding:0 12px;transition:all 0.2s;font-family:'Space Grotesk',sans-serif;}
+.tool-btn .icon{font-size:1rem;line-height:1;}
+.tool-btn .label{white-space:nowrap;}
+.tool-btn:hover{color:#fff;border-color:#4f8dff;}
+.tool-btn.active{background:#4f8dff;color:#fff;border-color:#4f8dff;}
+#cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:8px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
+#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}
+#ci::placeholder{color:#6b7280;}
+.icon-btn{width:32px;height:32px;border-radius:50%;border:none;background:transparent;color:#7a7a7a;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:color 0.2s;}
+.icon-btn:hover{color:#fff;}
+#sb{width:38px;height:38px;border-radius:50%;border:none;background:#4f8dff;color:#fff;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+#sb:hover{background:#2563eb;}
+#menu{display:flex;gap:8px;width:100%;max-width:760px;justify-content:flex-start;padding-left:4px;overflow:hidden;max-height:0;opacity:0;transition:max-height 0.25s ease,opacity 0.2s ease;}
+#menu.open{max-height:60px;opacity:1;}
+.menu-btn{height:40px;border-radius:14px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;padding:0 18px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;white-space:nowrap;}
+.menu-btn:hover{border-color:#4f8dff;color:#fff;}
+.menu-btn.dis{opacity:0.35;cursor:not-allowed;}
+.menu-btn.dis:hover{border-color:#2a2a2a;color:#ececec;}
+#cam-overlay{display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:#000;z-index:10000000;flex-direction:column;align-items:center;justify-content:flex-end;}
+#cam-overlay.active{display:flex;}
+#cam-video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
+#cam-close{position:absolute;top:16px;right:16px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);color:#fff;font-size:1.4rem;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:10000001;}
+#cam-capture{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:#fff;margin-bottom:40px;z-index:10000001;cursor:pointer;flex-shrink:0;}
+#cam-capture:active{transform:scale(0.9);}
+"""
+
+def build_input_html(vision):
+    t = T_PY.get(st.session_state.get("language", "en"), T_PY["en"])
+    flag = "1" if vision else "0"
+    return (
+        '<span id="vis" data-v="' + flag + '" style="display:none"></span>'
+        '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="' + H.escape(t["ask"]) + '" autocomplete="off"/>'
+        '<button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div>'
+        '<div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">' + H.escape(t["search"]) + '</span></button>'
+        '<button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">' + H.escape(t["think"]) + '</span></button></div>'
+        '<div id="menu"><button id="mb-photo" type="button" class="menu-btn">' + H.escape(t["photo"]) + '</button>'
+        '<button id="mb-camera" type="button" class="menu-btn">' + H.escape(t["camera"]) + '</button>'
+        '<button id="mb-file" type="button" class="menu-btn">\u2399 ' + H.escape(t["file"]) + '</button></div></div>'
+        '<div id="cam-overlay"><video id="cam-video" autoplay playsinline muted></video><button id="cam-close" type="button">\u2715</button><button id="cam-capture" type="button"></button><canvas id="cam-canvas" style="display:none"></canvas></div>'
+    )
+
+def get_chat_input(vision):
+    lang = st.session_state.get("language", "en")
+    name = "strafe_chat_input_" + lang + ("1" if vision else "0")
+    if "input_factories" not in st.session_state:
+        st.session_state.input_factories = {}
+    if name not in st.session_state.input_factories:
+        st.session_state.input_factories[name] = components.component(name, html=build_input_html(vision), css=INPUT_CSS, js=INPUT_JS)
+    return st.session_state.input_factories[name]
+
+def get_prompt():
+    vision = has_vision()
+    lang = st.session_state.get("language", "en")
+    result = get_chat_input(vision)(key="strafe_inp_" + lang + ("1" if vision else "0"), on_submitted_change=lambda: None)
+    if not result:
+        return None
+    ma = getattr(result, "menu_action", None)
+    if ma:
+        st.session_state["menu_action"] = ma
+    submitted = getattr(result, "submitted", None)
+    if submitted:
+        return submitted
+    return None
 
 COPY_CSS = """
 .cp-btn{width:100%;height:40px;border-radius:14px;border:1px solid #2a2a2a;background:#1a1a1a;color:#ececec;font-size:0.9rem;padding:0 18px;cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all 0.2s;box-sizing:border-box;}
@@ -590,7 +645,7 @@ export default function(component){
     if(!dataEl)return;
     const DATA=JSON.parse(dataEl.textContent);
     const I18N={
-        en:{your_chats:'YOUR CHATS',new_chat:'New chat',no_chats:'No chats yet',settings:'Settings',language:'Language',models:'Models',session:'Session',about:'About',providers:'Providers',groq_models:'Groq models',your_code:'Your code',copy_hint:'Click the code to copy. Enter it on another device to open your chats there.',copied:'Copied to clipboard!',sign_out:'Sign out',about_text:'Strafe is a project made for your use. Chats are stored on the server and tied to your code, so keep your code private.',danger:'Danger Zone',delete_all:'Delete all chats',yes:'Yes',cancel:'Cancel',save:'Save',rename_chat:'Rename chat',delete_chat_q:'Delete chat?',delete_chat_t:'Are you sure you want to delete this chat? This cannot be undone.',delete_all_q:'Delete all chats?',delete_all_t:'Are you sure you want to delete ALL chats? This cannot be undone.',sign_out_q:'Sign out?',sign_out_t:'You will return to the login page. Your chats are saved.',auto_on:'Auto on',lang_en:'English',lang_ru:'Russian',lang_uk:'Ukrainian'},
+        en:{your_chats:'YOUR CHATS',new_chat:'New chat',no_chats:'No chats yet',settings:'Settings',language:'Language',models:'Models',session:'Session',about:'About',providers:'Providers',groq_models:'Groq models',your_code:'Your code',copy_hint:'Click the code to copy. Enter it on another device to open your chats there.',copied:'Copied to clipboard!',sign_out:'Sign out',about_text:'Strafe is a project made for your use. Chats are stored on the server and tied to your code, so keep your code private.',danger:'Danger Zone',delete_all:'Delete all chats',yes:'Yes',cancel:'Cancel',save:'Save',rename_chat:'Rename chat',delete_chat_q:'Delete chat?',delete_chat_t:'Are you sure you want to delete this chat? This cannot be undone.',delete_all_q:'Delete all chats?',delete_all_t:'Are you sure you want to delete ALL chats? This cannot be undone.',sign_out_q:'Sign out?',sign_out_t:'You will return to the login page. Your chats are saved.',auto_on:'Auto on',lang_en:'English',lang_ru:'Russian',lang_uk:'Ukrainian',model_desc_prov_groq:'Groq has strong coding/math skills. Also known for fast responses.',model_desc_prov_celeris:'Gemma 4 is quick and good at everyday chat, writing and simple code.',model_desc_120b:'Best for long answers, writing and code.',model_desc_20b:'Smaller GPT-OSS model, idk what to say more becauseits just the weaker verision.',model_desc_qwen:'Has strong rule following, good at vision, also has least limits.'},
         ru:{your_chats:'ВАШИ ЧАТЫ',new_chat:'Новый чат',no_chats:'Чатов пока нет',settings:'Настройки',language:'Язык',models:'Модели',session:'Сессия',about:'О приложении',providers:'Провайдеры',groq_models:'Модели Groq',your_code:'Ваш код',copy_hint:'Нажмите на код, чтобы скопировать. Введите его на другом устройстве, чтобы открыть свои чаты.',copied:'Скопировано в буфер обмена!',sign_out:'Выйти',about_text:'Strafe — проект для вашего личного использования. Чаты хранятся на сервере и привязаны к вашему коду, поэтому держите код в секрете.',danger:'Опасная зона',delete_all:'Удалить все чаты',yes:'Да',cancel:'Отмена',save:'Сохранить',rename_chat:'Переименовать чат',delete_chat_q:'Удалить чат?',delete_chat_t:'Вы уверены, что хотите удалить этот чат? Это нельзя отменить.',delete_all_q:'Удалить все чаты?',delete_all_t:'Вы уверены, что хотите удалить ВСЕ чаты? Это нельзя отменить.',sign_out_q:'Выйти?',sign_out_t:'Вы вернётесь на страницу входа. Ваши чаты сохранены.',auto_on:'Авто',lang_en:'English',lang_ru:'Русский',lang_uk:'Українська'},
         uk:{your_chats:'ВАШІ ЧАТИ',new_chat:'Новий чат',no_chats:'Чатів поки немає',settings:'Налаштування',language:'Мова',models:'Моделі',session:'Сесія',about:'Про застосунок',providers:'Провайдери',groq_models:'Моделі Groq',your_code:'Ваш код',copy_hint:'Натисніть на код, щоб скопіювати. Введіть його на іншому пристрої, щоб відкрити свої чати.',copied:'Скопійовано в буфер обміну!',sign_out:'Вийти',about_text:'Strafe — проєкт для вашого особистого використання. Чати зберігаються на сервері й прив’язані до вашого коду, тож тримайте код у таємниці.',danger:'Небезпечна зона',delete_all:'Видалити всі чати',yes:'Так',cancel:'Скасувати',save:'Зберегти',rename_chat:'Перейменувати чат',delete_chat_q:'Видалити чат?',delete_chat_t:'Ви впевнені, що хочете видалити цей чат? Це не можна скасувати.',delete_all_q:'Видалити всі чати?',delete_all_t:'Ви впевнені, що хочете видалити ВСІ чати? Це не можна скасувати.',sign_out_q:'Вийти?',sign_out_t:'Ви повернетеся на сторінку входу. Ваші чати збережено.',auto_on:'Авто',lang_en:'English',lang_ru:'Русский',lang_uk:'Українська'}
     };
@@ -706,13 +761,17 @@ export default function(component){
             item.appendChild(dot);
             item.appendChild(text);
             item.onclick=()=>{
-                if(DATA.language!==lang.id){closeSettings();setTriggerValue('ui_action',{type:'set_language',lang:lang.id});}
+                if(DATA.language!==lang.id){setTriggerValue('ui_action',{type:'set_language',lang:lang.id});}
             };
             $langList.appendChild(item);
         });
     }
-    const PROVIDERS=[{id:'groq',name:'Groq',desc:'Groq has strong coding/math skills. Also known for fast responses.',badge:'Auto on'},{id:'celeris',name:'Gemma 4',desc:'Gemma 4 is quick and good at everyday chat, writing and simple code.',badge:''}];
-    const GROQ_MODELS=[{id:'qwen/qwen3.8-27b',name:'Qwen 3.8 27B'},{id:'openai/gpt-oss-120b',name:'OpenAI GPT-OSS 120B'},{id:'openai/gpt-oss-20b',name:'OpenAI GPT-OSS 20B'}];
+    const PROVIDERS=[{id:'groq',name:'Groq',desc:t('model_desc_prov_groq'),badge:t('auto_on')},{id:'celeris',name:'Gemma 4',desc:t('model_desc_prov_celeris'),badge:''}];
+    const GROQ_MODELS=[
+        {id:'openai/gpt-oss-120b',name:'OpenAI GPT-OSS 120B',desc:t('model_desc_120b')},
+        {id:'openai/gpt-oss-20b',name:'OpenAI GPT-OSS 20B',desc:t('model_desc_20b')},
+        {id:'qwen/qwen3.8-27b',name:'Qwen 3.8 27B',desc:t('model_desc_qwen')}
+    ];
     function renderProviders(){
         const $list=$('#model-list');
         $list.innerHTML='';
@@ -735,7 +794,7 @@ export default function(component){
             item.appendChild(dot);
             item.appendChild(text);
             item.onclick=()=>{
-                if(DATA.model!==p.id){closeSettings();setTriggerValue('ui_action',{type:'set_model',model:p.id});}
+                if(DATA.model!==p.id){setTriggerValue('ui_action',{type:'set_model',model:p.id});}
             };
             $list.appendChild(item);
         });
@@ -756,11 +815,15 @@ export default function(component){
             const title=document.createElement('div');
             title.className='radio-title';
             title.textContent=m.name;
+            const desc=document.createElement('div');
+            desc.className='radio-desc';
+            desc.textContent=m.desc;
             text.appendChild(title);
+            text.appendChild(desc);
             item.appendChild(dot);
             item.appendChild(text);
             item.onclick=()=>{
-                if(DATA.groq_model!==m.id){closeSettings();setTriggerValue('ui_action',{type:'set_groq_model',model:m.id});}
+                if(DATA.groq_model!==m.id){setTriggerValue('ui_action',{type:'set_groq_model',model:m.id});}
             };
             $gl.appendChild(item);
         });
@@ -885,6 +948,21 @@ def build_ui_html(data_json, code):
         '<script id="strafe-data" type="application/json">' + data_json + '</script>',
     ]
     return "\n".join(parts)
+
+def copy_button(text, key):
+    label = "\u29C9"
+    done = "\u2713"
+    payload = json.dumps({"t": text}, ensure_ascii=False).replace("</", "<\\/")
+    h = hashlib.md5((payload + label + done).encode()).hexdigest()[:10]
+    name = "strafe_copy_" + h
+    html = '<button id="cp" class="cp-btn" type="button" data-label="' + H.escape(label) + '" data-done="' + H.escape(done) + '">' + H.escape(label) + '</button><script id="strafe-copy-data" type="application/json">' + payload + '</script>'
+    if "copy_factories" not in st.session_state:
+        st.session_state.copy_factories = {}
+    if name not in st.session_state.copy_factories:
+        st.session_state.copy_factories[name] = components.component(name, html=html, css=COPY_CSS, js=COPY_JS)
+        while len(st.session_state.copy_factories) > 60:
+            del st.session_state.copy_factories[next(iter(st.session_state.copy_factories))]
+    st.session_state.copy_factories[name](key="cpk_" + h + "_" + key)
 
 def _code_hash():
     return hash_code(st.session_state.get("active_code", ""))
@@ -1067,34 +1145,6 @@ def render_ui():
         action = getattr(result, "ui_action", None)
         if action:
             handle_action(action)
-
-def get_prompt():
-    result = chat_input(key="strafe_inp", on_submitted_change=lambda: None)
-    if not result:
-        return None
-    ma = getattr(result, "menu_action", None)
-    if ma:
-        st.session_state["menu_action"] = ma
-    submitted = getattr(result, "submitted", None)
-    if submitted:
-        return submitted
-    return None
-
-def copy_button(text, key):
-    lang = st.session_state.get("language", "en")
-    label = T_PY.get(lang, T_PY["en"])["copy"]
-    done = T_PY.get(lang, T_PY["en"])["copied"]
-    payload = json.dumps({"t": text}, ensure_ascii=False).replace("</", "<\\/")
-    h = hashlib.md5((payload + label + done).encode()).hexdigest()[:10]
-    name = "strafe_copy_" + h
-    html = '<button id="cp" class="cp-btn" type="button" data-label="' + H.escape(label) + '" data-done="' + H.escape(done) + '">' + H.escape(label) + '</button><script id="strafe-copy-data" type="application/json">' + payload + '</script>'
-    if "copy_factories" not in st.session_state:
-        st.session_state.copy_factories = {}
-    if name not in st.session_state.copy_factories:
-        st.session_state.copy_factories[name] = components.component(name, html=html, css=COPY_CSS, js=COPY_JS)
-        while len(st.session_state.copy_factories) > 60:
-            del st.session_state.copy_factories[next(iter(st.session_state.copy_factories))]
-    st.session_state.copy_factories[name](key="cpk_" + h + "_" + key)
 
 CSS = """
 <link href='https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap' rel='stylesheet'>
@@ -1319,8 +1369,7 @@ def msg_to_api(m, distance_from_latest=None):
 
 def build_payload(history):
     model = pick_model()
-    lang = LANG_NAMES.get(st.session_state.get("language", "en"), "English")
-    system_text = SYSTEM + "\nToday is " + datetime.now().strftime("%Y-%m-%d") + ". Always reply in " + lang + " unless the user asks for another language."
+    system_text = SYSTEM + "\nToday is " + datetime.now().strftime("%Y-%m-%d") + "."
     msgs = [{"role": "system", "content": system_text}] + history
     if st.session_state.get("model_choice") == "celeris":
         return dict(model=model, messages=msgs, max_tokens=1024, temperature=0.7)
@@ -1447,6 +1496,9 @@ if pending is not None:
     use_think = pending.get("think", False) if isinstance(pending, dict) else False
     images = pending.get("images", []) if isinstance(pending, dict) else []
     files = pending.get("files", []) if isinstance(pending, dict) else []
+    if images and not has_vision():
+        images = []
+        st.toast("This model doesn't support images. Dropped the photo.")
     is_look_back = text.strip().lower() == "look_back"
     st.session_state.messages.append({"role": "user", "content": text, "sent": datetime.now().strftime("%H:%M"), "search": use_search, "think": use_think, "images": images, "files": files})
     try:
@@ -1466,7 +1518,7 @@ for i, m in enumerate(st.session_state.messages):
             new = st.text_area("Edit", value=m["content"], key="ed" + str(i), height=110, label_visibility="collapsed")
             sc, sk = st.columns([1, 1])
             with sc:
-                if st.button(tp("edit") if False else "Save", key="sv" + str(i)):
+                if st.button("Save", key="sv" + str(i)):
                     st.session_state.messages[:] = st.session_state.messages[:i]
                     st.session_state["pending"] = {"text": new, "search": m.get("search", False), "think": m.get("think", False), "images": m.get("images", []), "files": m.get("files", [])}
                     st.session_state["editing"] = None
@@ -1485,7 +1537,7 @@ for i, m in enumerate(st.session_state.messages):
                 with st.popover(MENU_GLYPH, key="mu" + str(i)):
                     st.html(info_html(m))
                     copy_button(m["content"], "u" + str(i))
-                    if st.button(tp("edit"), key="ue" + str(i)):
+                    if st.button("\u270E", key="ue" + str(i), help=tp("edit")):
                         st.session_state["act"] = ("edit", i)
                         st.rerun()
     else:
@@ -1501,7 +1553,7 @@ for i, m in enumerate(st.session_state.messages):
             with st.popover(MENU_GLYPH, key="ma" + str(i)):
                 st.html(info_html(m))
                 copy_button(m["content"], "a" + str(i))
-                if st.button(tp("retry"), key="ar" + str(i)):
+                if st.button("\u21BB", key="ar" + str(i), help=tp("retry")):
                     st.session_state["act"] = ("retry", i)
                     st.rerun()
 
@@ -1518,5 +1570,7 @@ if ma:
         st.toast("Unsupported file type. Use text/code files only.")
     elif ma == "file_too_large":
         st.toast("File too large. Max 500KB for text files.")
+    elif ma == "no_vision":
+        st.toast("This model doesn't have vision. Switch to a vision model in Settings > Models.")
     else:
         st.toast(str(ma) + " selected")
