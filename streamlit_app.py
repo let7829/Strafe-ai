@@ -35,9 +35,9 @@ NO_VISION_MODELS = {"openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 LANG_NAMES = {"en": "English", "ru": "Russian", "uk": "Ukrainian"}
 
 T_PY = {
-    "en": {"edit": "Edit", "retry": "Retry", "copy": "Copy", "copied": "Copied", "think": "Think", "search": "Search", "photo": "Photo", "camera": "Camera", "file": "File", "ask": "Ask something", "no_search": "Gemma 4 doesn't support search. Disabled for this message.", "no_vision": "This model doesn't have vision. Switch to a vision model in Settings > Models.", "image_dropped": "This model doesn't support images. Photo not sent."},
-    "ru": {"edit": "Изменить", "retry": "Повторить", "copy": "Копировать", "copied": "Скопировано", "think": "Думать", "search": "Поиск", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Спросите что-нибудь", "no_search": "Gemma 4 не поддерживает поиск. Отключено для этого сообщения.", "no_vision": "Эта модель не поддерживает изображения. Выберите модель с распознаванием картинок в Настройки > Модели.", "image_dropped": "Эта модель не поддерживает изображения. Фото не отправлено."},
-    "uk": {"edit": "Редагувати", "retry": "Повторити", "copy": "Копіювати", "copied": "Скопійовано", "think": "Думати", "search": "Пошук", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Запитайте що-небудь", "no_search": "Gemma 4 не підтримує пошук. Вимкнено для цього повідомлення.", "no_vision": "Ця модель не підтримує зображення. Оберіть модель із підтримкою зору в Налаштування > Моделі.", "image_dropped": "Ця модель не підтримує зображення. Фото не надіслано."},
+    "en": {"edit": "Edit", "retry": "Retry", "copy": "Copy", "copied": "Copied", "think": "Think", "search": "Search", "photo": "Photo", "camera": "Camera", "file": "File", "ask": "Ask something", "no_vision": "This model doesn't have vision. Switch to a vision model in Settings > Models.", "image_dropped": "This model doesn't support images. Photo not sent."},
+    "ru": {"edit": "Изменить", "retry": "Повторить", "copy": "Копировать", "copied": "Скопировано", "think": "Думать", "search": "Поиск", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Спросите что-нибудь", "no_vision": "Эта модель не поддерживает изображения. Выберите модель с распознаванием картинок в Настройки > Модели.", "image_dropped": "Эта модель не поддерживает изображения. Фото не отправлено."},
+    "uk": {"edit": "Редагувати", "retry": "Повторити", "copy": "Копіювати", "copied": "Скопійовано", "think": "Думати", "search": "Пошук", "photo": "Фото", "camera": "Камера", "file": "Файл", "ask": "Запитайте що-небудь", "no_vision": "Ця модель не підтримує зображення. Оберіть модель із підтримкою зору в Налаштування > Моделі.", "image_dropped": "Ця модель не підтримує зображення. Фото не надіслано."},
 }
 
 def tp(key):
@@ -401,6 +401,7 @@ export default function(component){
         attachments.push(resized);
         renderAtts();
     }
+    function grow(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,180)+'px';}
     async function send(){
         const val=input.value.trim();
         if(!val&&!attachments.length&&!fileAttachments.length)return;
@@ -408,12 +409,14 @@ export default function(component){
         for(let i=0;i<attachments.length;i++){resized.push(await resizeImage(attachments[i],1024));}
         setTriggerValue('submitted',{text:val,search:searchActive,think:thinkActive,images:resized,files:fileAttachments.slice()});
         input.value='';
+        input.style.height='auto';
         attachments=[];
         fileAttachments=[];
         renderAtts();
     }
     btn.onclick=send;
-    input.onkeydown=function(e){if(e.key==='Enter')send();};
+    input.addEventListener('input',grow);
+    input.onkeydown=function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}};
     if(plusBtn&&menu){plusBtn.onclick=function(){menu.classList.toggle('open');};}
     if(!canVision){
         if(photoBtn)photoBtn.classList.add('dis');
@@ -473,7 +476,7 @@ INPUT_CSS = """
 .tool-btn:hover{color:#fff;border-color:#4f8dff;}
 .tool-btn.active{background:#4f8dff;color:#fff;border-color:#4f8dff;}
 #cb{display:flex;align-items:center;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:28px;padding:10px 14px;gap:8px;width:100%;max-width:760px;margin:0 auto;box-sizing:border-box;box-shadow:0 4px 20px rgba(0,0,0,0.5);}
-#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;}
+#ci{flex:1;background:transparent;border:none;outline:none;color:#fff;font-size:1rem;font-family:'Space Grotesk',sans-serif;padding:8px 4px;resize:none;overflow-y:auto;max-height:180px;line-height:1.4;min-height:24px;}
 #ci::placeholder{color:#6b7280;}
 .icon-btn{width:32px;height:32px;border-radius:50%;border:none;background:transparent;color:#7a7a7a;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:color 0.2s;}
 .icon-btn:hover{color:#fff;}
@@ -498,7 +501,7 @@ def build_input_html(vision):
     flag = "1" if vision else "0"
     return (
         '<span id="vis" data-v="' + flag + '" style="display:none"></span>'
-        '<div id="bar"><div id="atts"></div><div id="cb"><input id="ci" type="text" placeholder="' + H.escape(t["ask"]) + '" autocomplete="off"/>'
+        '<div id="bar"><div id="atts"></div><div id="cb"><textarea id="ci" rows="1" placeholder="' + H.escape(t["ask"]) + '" autocomplete="off"></textarea>'
         '<button id="pb" type="button" class="icon-btn">' + PLUS_GLYPH + '</button><button id="sb" type="button">' + SEND_GLYPH + '</button></div>'
         '<div id="tools"><button id="btn-search" type="button" class="tool-btn active"><span class="icon">\u2315</span><span class="label">' + H.escape(t["search"]) + '</span></button>'
         '<button id="btn-think" type="button" class="tool-btn"><span class="icon">\u269b</span><span class="label">' + H.escape(t["think"]) + '</span></button></div>'
@@ -1166,8 +1169,8 @@ div[data-testid='stHorizontalBlock'] > div:nth-child(2) > div[data-testid='stVer
 div[data-testid='stHorizontalBlock'] > div:nth-child(2) div[data-testid='stPopoverContent']{left:auto !important;right:0 !important;}
 .brand{text-align:center;padding:8px 0 2px 0;font-size:1.4rem;font-weight:700;letter-spacing:3px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;}
 .user-bubble{display:flex;justify-content:flex-end;width:100%;margin:10px 0 0 0;}
-.user-bubble-inner{background:#5c5c5c;color:#ffffff;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
-.chat-thumb{width:64px;height:64px;object-fit:cover;border-radius:12px;margin:0 8px 6px 0;vertical-align:middle;border:1px solid #2a2a2a;}
+.user-bubble-inner{background:#1a1a1a;color:#ececec;border:1px solid #2a2a2a;border-radius:26px 26px 8px 26px;padding:14px 22px;max-width:80%;width:fit-content;font-size:1.05rem;line-height:1.5;word-wrap:break-word;}
+.chat-thumb{width:64px;height:64px;object-fit:cover;border-radius:12px;margin:0 8px 6px 0;vertical-align:middle;border:1px solid #2a2a2a;cursor:zoom-in;}
 .file-badge{display:inline-flex;align-items:center;gap:4px;background:#2a2a2a;border-radius:8px;padding:4px 10px;font-size:0.75rem;color:#bdbdbd;margin:0 8px 6px 0;font-family:'Space Grotesk',sans-serif;}
 div[data-testid='stPopover']{margin:0 !important;max-width:100% !important;}
 div[data-testid='stPopover'] button{height:20px !important;min-height:0 !important;padding:0 4px !important;font-size:1rem !important;line-height:1 !important;color:#7a7a7a !important;background:transparent !important;border:none !important;box-shadow:none !important;}
@@ -1182,6 +1185,10 @@ div[class*='st-key-sv'] button{background:#4f8dff !important;color:#fff !importa
 div[class*='st-key-sv'] button:hover{background:#2563eb !important;}
 div[class*='st-key-cx'] button{background:#1a1a1a !important;color:#bdbdbd !important;border:1px solid #2a2a2a !important;border-radius:18px !important;height:36px !important;min-height:36px !important;padding:0 18px !important;font-family:'Space Grotesk',sans-serif !important;font-size:0.9rem !important;}
 div[class*='st-key-cx'] button:hover{color:#fff !important;border-color:#4f8dff !important;}
+.img-full{position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:10000010;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;}
+.img-full img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;}
+.img-full-x{position:absolute;top:16px;left:16px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,0.12);color:#fff;font-size:1.3rem;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.img-full-x:hover{background:rgba(255,255,255,0.22);}
 .login-page{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:85vh;padding:20px;}
 .login-brand{font-size:3rem;font-weight:700;letter-spacing:8px;background:linear-gradient(90deg,#00f0ff,#a855f7);-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:8px;}
 .login-sub{color:#6b7280;font-size:0.9rem;margin-bottom:40px;letter-spacing:1px;}
@@ -1193,6 +1200,38 @@ div[class*='st-key-cx'] button:hover{color:#fff !important;border-color:#4f8dff 
 .login-error{background:#2a1a1a;border:1px solid #ff5555;border-radius:10px;padding:12px 16px;color:#ff8888;font-size:0.85rem;margin-bottom:16px;text-align:center;}
 .login-info{color:#6b7280;font-size:0.78rem;text-align:center;margin-top:16px;line-height:1.5;}
 </style>
+"""
+
+IMG_VIEWER_JS = """
+<script>
+(function(){
+    if(window.__strafeImgViewer)return;
+    window.__strafeImgViewer=true;
+    function close(){var o=document.getElementById('strafe-img-full');if(o)o.remove();}
+    function open(src){
+        close();
+        var o=document.createElement('div');
+        o.id='strafe-img-full';
+        o.className='img-full';
+        var x=document.createElement('button');
+        x.className='img-full-x';
+        x.type='button';
+        x.textContent='\\u2715';
+        x.onclick=close;
+        var im=document.createElement('img');
+        im.src=src;
+        o.appendChild(x);
+        o.appendChild(im);
+        o.onclick=function(e){if(e.target===o)close();};
+        document.body.appendChild(o);
+    }
+    document.addEventListener('click',function(e){
+        var t=e.target;
+        if(t&&t.classList&&t.classList.contains('chat-thumb')){open(t.src);}
+    },true);
+    document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});
+})();
+</script>
 """
 
 active_code = get_active_code()
@@ -1254,6 +1293,7 @@ if not active_code:
     st.stop()
 
 st.html(CSS)
+st.html(IMG_VIEWER_JS)
 st.html("<div class='brand'>STRAFE AI</div>")
 
 KEYS = [st.secrets.get("GROQ_API_KEY_" + str(i)) for i in range(1, 7)]
@@ -1404,9 +1444,6 @@ def ask(use_search=False, use_think=False, look_back=False):
     use_celeris = st.session_state.get("model_choice") == "celeris"
     if use_celeris and not celeris_ready():
         raise RuntimeError("Celeris not configured.")
-    if use_celeris and use_search:
-        st.toast(tp("no_search"))
-        use_search = False
     t0 = time.time()
     slice_msgs = st.session_state.messages if look_back else st.session_state.messages[-HISTORY_LIMIT:]
     total = len(slice_msgs)
@@ -1448,7 +1485,7 @@ def ask(use_search=False, use_think=False, look_back=False):
                     history.append({"role": "tool", "tool_call_id": tc.id, "content": context})
             continue
         content = (msg.content or "").strip()
-        reasoning = getattr(msg, "reasoning_content", None)
+        reasoning = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None)
         secs = max(0.1, time.time() - t0)
         used = r.usage.total_tokens if r.usage else 0
         tps = round(used / secs, 1) if used else 0
