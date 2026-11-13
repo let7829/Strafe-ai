@@ -47,6 +47,21 @@ SYSTEM = (
     "REMEMBER: DO NOT OFFER DECISIONS FOR THE USER, YOU CHOOSE DECISIONS FOR THE USER."
 )
 
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Search the web for current information.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query."}
+            },
+            "required": ["query"]
+        }
+    }
+}
+
 def tp(key):
     lang = st.session_state.get("language", "en")
     return T_PY.get(lang, T_PY["en"])[key]
@@ -60,8 +75,11 @@ def too_long(text):
     return len(text) / 4 > MAX_INPUT_TOKENS
 
 def clean_reply(text):
-    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL)
-    text = re.sub(r"(?im)^\s*(wait|let me re-read|let me check|actually)\b.*$", "", text)
+    text = re.sub(r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"\[(?:think|thinking|reasoning)\].*?\[/(?:think|thinking|reasoning)\]", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"(?im)^\s*\*\*(?:wait|hmm|let me|let's see|actually)\b.*?\*\*.*$", "", text)
+    text = re.sub(r"(?im)^\s*(?:wait|hmm|let me|let's see|actually)\b.*$", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 def _log(where, e):
@@ -194,6 +212,12 @@ cookie_manager = stx.CookieManager()
 
 def get_cookie_code():
     try:
+        cookies = st.context.cookies
+        if cookies and COOKIE_KEY in cookies:
+            return cookies.get(COOKIE_KEY)
+    except Exception as e:
+        _log("get_cookie_code ctx", e)
+    try:
         cookies = cookie_manager.get_all()
         if cookies and COOKIE_KEY in cookies:
             return cookies[COOKIE_KEY]
@@ -222,11 +246,9 @@ def get_active_code():
         return code
     url_code = get_url_code()
     if url_code:
-        drop_url_code()
         url_code = url_code.upper()
         if len(url_code) == CODE_LENGTH and code_exists(hash_code(url_code)):
             st.session_state.active_code = url_code
-            set_cookie_code(url_code)
             return url_code
     cookie_code = get_cookie_code()
     if cookie_code:
@@ -246,6 +268,11 @@ def do_logout():
         cookie_manager.delete(COOKIE_KEY)
     except Exception as e:
         _log("do_logout", e)
+    try:
+        if "code" in st.query_params:
+            del st.query_params["code"]
+    except Exception as e:
+        _log("do_logout query", e)
 
 def db_get_chats(code_hash):
     try:
@@ -1217,6 +1244,13 @@ div[class*='st-key-cx'] button:hover{color:#fff !important;border-color:#4f8dff 
 </style>
 """
 
+LOGIN_POS_CSS = """
+<style>
+section.main .block-container{padding-top:10vh !important;max-width:460px !important;}
+div[class*='st-key-login_box']{background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:28px 26px;box-shadow:0 20px 60px rgba(0,0,0,0.85);}
+</style>
+"""
+
 IMG_VIEWER_JS = """
 <script>
 (function(){
@@ -1253,58 +1287,56 @@ active_code = get_active_code()
 
 if not active_code:
     st.html(CSS)
+    st.html(LOGIN_POS_CSS)
     ip = get_ip()
     err = st.session_state.pop("login_error", None)
-    st.html('<div class="login-page">')
     st.html('<div class="login-brand">STRAFE</div>')
     st.html('<div class="login-sub">Enter your code to continue</div>')
-    st.html('<div class="login-box">')
-    if is_banned(ip):
-        st.html('<div class="login-error">Too many failed attempts. Your IP is banned for 15 minutes.</div>')
-        st.html('</div></div>')
-        st.stop()
-    cooldown = get_cooldown(ip)
-    if cooldown > 0:
-        st.html('<div class="login-error">Please wait ' + str(int(cooldown)) + ' seconds before trying again.</div>')
-        st.html('</div></div>')
-        st.stop()
-    if err:
-        st.html('<div class="login-error">' + H.escape(err) + '</div>')
-    st.html('<div class="login-label">Your code</div>')
-    code_input = st.text_input("code", placeholder="8 character code", max_chars=8, key="login_code_input", label_visibility="collapsed")
-    col_a, col_b = st.columns([5, 1])
-    with col_b:
-        send_clicked = st.button(SEND_GLYPH, key="login_send_btn", type="primary", use_container_width=True)
-    if send_clicked:
-        raw = (code_input or "").strip().upper()
-        if len(raw) != CODE_LENGTH:
-            st.session_state["login_error"] = "Code must be exactly 8 characters."
-            record_attempt(ip, False)
+    with st.container(key="login_box"):
+        if is_banned(ip):
+            st.html('<div class="login-error">Too many failed attempts. Your IP is banned for 15 minutes.</div>')
+            st.stop()
+        cooldown = get_cooldown(ip)
+        if cooldown > 0:
+            st.html('<div class="login-error">Please wait ' + str(int(cooldown)) + ' seconds before trying again.</div>')
+            st.stop()
+        if err:
+            st.html('<div class="login-error">' + H.escape(err) + '</div>')
+        st.html('<div class="login-label">Your code</div>')
+        code_input = st.text_input("code", placeholder="8 character code", max_chars=8, key="login_code_input", label_visibility="collapsed")
+        col_a, col_b = st.columns([5, 1])
+        with col_b:
+            send_clicked = st.button(SEND_GLYPH, key="login_send_btn", type="primary", use_container_width=True)
+        if send_clicked:
+            raw = (code_input or "").strip().upper()
+            if len(raw) != CODE_LENGTH:
+                st.session_state["login_error"] = "Code must be exactly 8 characters."
+                record_attempt(ip, False)
+                st.rerun()
+            if not all(c in string.ascii_uppercase + string.digits for c in raw):
+                st.session_state["login_error"] = "Code can only contain A-Z and 0-9."
+                record_attempt(ip, False)
+                st.rerun()
+            if not code_exists(hash_code(raw)):
+                st.session_state["login_error"] = "Invalid code. Generate a new one below."
+                record_attempt(ip, False)
+                st.rerun()
+            record_attempt(ip, True)
+            do_login(raw)
+            if st.query_params.get("code") != raw:
+                st.query_params["code"] = raw
             st.rerun()
-        if not all(c in string.ascii_uppercase + string.digits for c in raw):
-            st.session_state["login_error"] = "Code can only contain A-Z and 0-9."
-            record_attempt(ip, False)
+        st.html('<div class="login-divider">OR</div>')
+        if st.button("\uff0b Generate new code", key="login_gen_btn", use_container_width=True):
+            new_code = gen_code()
+            create_code(new_code)
+            record_attempt(ip, True)
+            do_login(new_code)
+            st.toast("Your code: " + new_code + " \u2014 save it somewhere safe!")
+            if st.query_params.get("code") != new_code:
+                st.query_params["code"] = new_code
             st.rerun()
-        if not code_exists(hash_code(raw)):
-            st.session_state["login_error"] = "Invalid code. Generate a new one below."
-            record_attempt(ip, False)
-            st.rerun()
-        record_attempt(ip, True)
-        do_login(raw)
-        time.sleep(0.3)
-        st.rerun()
-    st.html('<div class="login-divider">OR</div>')
-    if st.button("\uff0b Generate new code", key="login_gen_btn", use_container_width=True):
-        new_code = gen_code()
-        create_code(new_code)
-        record_attempt(ip, True)
-        do_login(new_code)
-        st.toast("Your code: " + new_code + " \u2014 save it somewhere safe!")
-        time.sleep(0.5)
-        st.rerun()
     st.html('<div class="login-info">Your chats and settings are tied to this code.<br>Enter it on another device to open your data there.</div>')
-    st.html('</div>')
-    st.html('</div>')
     st.stop()
 
 st.html(CSS)
